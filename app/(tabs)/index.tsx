@@ -11,6 +11,7 @@ import {
   Alert,
   Modal,
   Platform,
+  Linking,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createClient } from '@supabase/supabase-js';
@@ -109,11 +110,27 @@ export default function App() {
     }
   };
 
+  // Direct Call Action
+  const handleCall = (phoneNumber) => {
+    if (!phoneNumber) return;
+    Linking.openURL(`tel:${phoneNumber}`).catch(() => {
+      Alert.alert('Error', 'Unable to open phone dialer on this device.');
+    });
+  };
+
+  // Direct Email Action
+  const handleEmail = (emailAddress) => {
+    if (!emailAddress) return;
+    Linking.openURL(`mailto:${emailAddress}?subject=CarrySpace Listing Inquiry`).catch(() => {
+      Alert.alert('Error', 'Unable to open email client on this device.');
+    });
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* Header with Settings Restored */}
+      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerSpacer} />
         <Text style={styles.logo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
@@ -266,16 +283,31 @@ export default function App() {
           ))}
       </ScrollView>
 
-      {/* Modal View */}
+      {/* Actionable Contact Modal */}
       <Modal visible={selectedListing !== null} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Contact Info</Text>
+            <Text style={styles.modalTitle}>Direct Contact</Text>
             {selectedListing && (
               <>
-                <Text style={styles.modalText}>👤 Name: {selectedListing.name}</Text>
-                <Text style={styles.modalText}>✉️ Email: {selectedListing.email}</Text>
-                <Text style={styles.modalText}>📞 Phone: {selectedListing.phone}</Text>
+                <Text style={styles.modalName}>{selectedListing.name}</Text>
+                <Text style={styles.modalSub}>Route: {selectedListing.route}</Text>
+                
+                <View style={styles.actionRow}>
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, styles.callBtn]}
+                    onPress={() => handleCall(selectedListing.phone)}
+                  >
+                    <Text style={styles.actionBtnText}>📞 Call Now</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, styles.emailBtn]}
+                    onPress={() => handleEmail(selectedListing.email)}
+                  >
+                    <Text style={styles.actionBtnText}>✉️ Send Email</Text>
+                  </TouchableOpacity>
+                </View>
               </>
             )}
             <TouchableOpacity style={styles.closeButton} onPress={() => setSelectedListing(null)}>
@@ -293,7 +325,7 @@ const styles = StyleSheet.create({
   header: { 
     padding: 16, 
     flexDirection: 'row', 
-    justify: 'space-between', 
+    justifyContent: 'space-between', 
     alignItems: 'center', 
     borderBottomWidth: 1, 
     borderBottomColor: '#1E293B' 
@@ -330,9 +362,15 @@ const styles = StyleSheet.create({
   contactButton: { backgroundColor: '#2563EB', padding: 10, borderRadius: 8, alignItems: 'center' },
   contactButtonText: { color: '#FFFFFF', fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#1E293B', padding: 24, borderRadius: 16, width: '80%' },
-  modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
-  modalText: { color: '#FFFFFF', fontSize: 15, marginBottom: 8 },
-  closeButton: { backgroundColor: '#EF4444', padding: 10, borderRadius: 8, alignItems: 'center', marginTop: 16 },
+  modalContent: { backgroundColor: '#1E293B', padding: 24, borderRadius: 16, width: '85%' },
+  modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
+  modalName: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  modalSub: { color: '#94A3B8', fontSize: 14, marginBottom: 16 },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginHorizontal: 4 },
+  callBtn: { backgroundColor: '#10B981' },
+  emailBtn: { backgroundColor: '#2563EB' },
+  actionBtnText: { color: '#FFFFFF', fontWeight: 'bold' },
+  closeButton: { backgroundColor: '#EF4444', padding: 10, borderRadius: 8, alignItems: 'center', marginTop: 8 },
   closeButtonText: { color: '#FFFFFF', fontWeight: 'bold' },
 });
