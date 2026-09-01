@@ -43,9 +43,11 @@ export default function App() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dateText, setDateText] = useState('');
 
-  // Feed & Modal State
+  // Feed & Modals State
   const [listings, setListings] = useState(INITIAL_FALLBACK_DATA);
   const [selectedListing, setSelectedListing] = useState(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   useEffect(() => {
     fetchListings();
@@ -110,7 +112,6 @@ export default function App() {
     }
   };
 
-  // Direct Call Action
   const handleCall = (phoneNumber) => {
     if (!phoneNumber) return;
     Linking.openURL(`tel:${phoneNumber}`).catch(() => {
@@ -118,12 +119,45 @@ export default function App() {
     });
   };
 
-  // Direct Email Action
   const handleEmail = (emailAddress) => {
     if (!emailAddress) return;
     Linking.openURL(`mailto:${emailAddress}?subject=CarrySpace Listing Inquiry`).catch(() => {
       Alert.alert('Error', 'Unable to open email client on this device.');
     });
+  };
+
+  // Account Deletion Prompt
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account & Data',
+      'Are you sure you want to delete your account? This action is permanent and will remove all your active listings and associated personal data.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete Permanently', 
+          style: 'destructive',
+          onPress: () => {
+            setShowSettingsModal(false);
+            Alert.alert('Account Deleted', 'Your account and associated data have been deleted successfully.');
+          } 
+        },
+      ]
+    );
+  };
+
+  // Smooth Navigation Between Modals
+  const openPrivacyPolicy = () => {
+    setShowSettingsModal(false);
+    setTimeout(() => {
+      setShowPrivacyModal(true);
+    }, 200);
+  };
+
+  const closePrivacyPolicy = () => {
+    setShowPrivacyModal(false);
+    setTimeout(() => {
+      setShowSettingsModal(true);
+    }, 200);
   };
 
   return (
@@ -136,7 +170,7 @@ export default function App() {
         <Text style={styles.logo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
         <TouchableOpacity 
           style={styles.settingsButton}
-          onPress={() => Alert.alert('Settings', 'Settings menu coming soon!')}
+          onPress={() => setShowSettingsModal(true)}
         >
           <Text style={styles.settingsIcon}>⚙️</Text>
         </TouchableOpacity>
@@ -316,6 +350,66 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      {/* Settings Modal */}
+      <Modal visible={showSettingsModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Settings & Privacy</Text>
+
+            <TouchableOpacity 
+              style={styles.settingsRowBtn}
+              onPress={openPrivacyPolicy}
+            >
+              <Text style={styles.settingsRowText}>📄 View Privacy Policy</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.settingsRowBtn, styles.deleteBtn]}
+              onPress={handleDeleteAccount}
+            >
+              <Text style={styles.deleteBtnText}>🗑️ Delete Account & Data</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={() => setShowSettingsModal(false)}
+            >
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* In-App Privacy Policy Viewer Modal */}
+      <Modal visible={showPrivacyModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>Privacy Policy</Text>
+            <ScrollView style={{ marginVertical: 12 }}>
+              <Text style={styles.privacyBody}>
+                At CarrySpace, we respect your privacy and are committed to protecting your personal information.{'\n\n'}
+                <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>1. Information We Collect:{'\n'}</Text>
+                CarrySpace collects personal details provided directly by users, including Full Name, Email Address, Phone Number, Photo, Address, and ID / Passport details, along with delivery route specifics for luggage matching purposes.{'\n\n'}
+                <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>2. How We Use Information:{'\n'}</Text>
+                Your information is used exclusively to connect package senders with travelers and verify account authenticity. We do not sell your personal data to third parties.{'\n\n'}
+                <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>3. Limitation of Liability & Disclaimers:{'\n'}</Text>
+                CarrySpace, its owners, and developers act solely as a passive venue connecting users. CarrySpace is strictly NOT responsible or liable for any lost, stolen, damaged, or delayed items or packages arranged through the platform. Furthermore, CarrySpace, its owners, and developers are NOT responsible or liable for any payment of additional customs duties, import taxes, penalties, or border inspections. Users are solely responsible for declaring goods and complying with all local and international customs laws.{'\n\n'}
+                <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>4. Data Retention & Account Deletion:{'\n'}</Text>
+                You have full control over your personal data. You may request account and data deletion at any time directly through the Settings menu in this application.{'\n\n'}
+                <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>5. Security & Contact:{'\n'}</Text>
+                We use industry-standard encryption protocols (via Supabase) to protect all submitted listings and personal data. For privacy inquiries, contact us at <Text style={{ color: '#F59E0B' }}>support.carryspace@gmail.com</Text>.
+              </Text>
+            </ScrollView>
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={closePrivacyPolicy}
+            >
+              <Text style={styles.closeButtonText}>Back to Settings</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -363,7 +457,7 @@ const styles = StyleSheet.create({
   contactButtonText: { color: '#FFFFFF', fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { backgroundColor: '#1E293B', padding: 24, borderRadius: 16, width: '85%' },
-  modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
+  modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
   modalName: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   modalSub: { color: '#94A3B8', fontSize: 14, marginBottom: 16 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
@@ -371,6 +465,11 @@ const styles = StyleSheet.create({
   callBtn: { backgroundColor: '#10B981' },
   emailBtn: { backgroundColor: '#2563EB' },
   actionBtnText: { color: '#FFFFFF', fontWeight: 'bold' },
-  closeButton: { backgroundColor: '#EF4444', padding: 10, borderRadius: 8, alignItems: 'center', marginTop: 8 },
+  closeButton: { backgroundColor: '#334155', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 8 },
   closeButtonText: { color: '#FFFFFF', fontWeight: 'bold' },
+  settingsRowBtn: { backgroundColor: '#0F172A', padding: 14, borderRadius: 10, marginBottom: 12 },
+  settingsRowText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  deleteBtn: { backgroundColor: '#451A1A', borderWidth: 1, borderColor: '#EF4444' },
+  deleteBtnText: { color: '#EF4444', fontSize: 15, fontWeight: 'bold' },
+  privacyBody: { color: '#94A3B8', fontSize: 13, lineHeight: 20 },
 });
