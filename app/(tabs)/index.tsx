@@ -12,6 +12,7 @@ import {
   Modal,
   Platform,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createClient } from '@supabase/supabase-js';
@@ -29,6 +30,13 @@ const INITIAL_FALLBACK_DATA = [
 
 export default function App() {
   const [role, setRole] = useState('sender');
+  const [user, setUser] = useState(null);
+  const [loadingSession, setLoadingSession] = useState(true);
+
+  // Auth Screen State
+  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
 
   // Form Fields
   const [fullName, setFullName] = useState('');
@@ -48,16 +56,73 @@ export default function App() {
   const [selectedListing, setSelectedListing] = useState(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   useEffect(() => {
+    checkActiveSession();
     fetchListings();
   }, []);
+
+  const checkActiveSession = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      setUser(session.user);
+    }
+    setLoadingSession(false);
+
+    // Listen for auth state changes
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+  };
 
   const fetchListings = async () => {
     const { data, error } = await supabase.from('listings').select('*').order('id', { ascending: false });
     if (data && data.length > 0) {
       setListings([...data, ...INITIAL_FALLBACK_DATA]);
     }
+  };
+
+  // Auth Actions
+  const handleAuth = async () => {
+    if (!authEmail || !authPassword) {
+      Alert.alert('Incomplete Fields', 'Please enter both email and password.');
+      return;
+    }
+
+    if (authMode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) {
+        Alert.alert('Sign Up Error', error.message);
+      } else {
+        Alert.alert('Account Created', 'Your account has been created successfully!');
+        setUser(data.user);
+        setAuthEmail('');
+        setAuthPassword('');
+      }
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) {
+        Alert.alert('Login Error', error.message);
+      } else {
+        setUser(data.user);
+        setAuthEmail('');
+        setAuthPassword('');
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setShowSettingsModal(false);
+    Alert.alert('Signed Out', 'You have been logged out.');
   };
 
   const handleDateChange = (event, selectedDate) => {
@@ -92,6 +157,7 @@ export default function App() {
       price: `$${calculatedPrice}`,
       date: dateText,
       type: role === 'sender' ? 'sender' : 'traveler',
+      user_id: user ? user.id : null,
     };
 
     const { error } = await supabase.from('listings').insert([newEntry]);
@@ -126,26 +192,30 @@ export default function App() {
     });
   };
 
-  // Account Deletion Prompt
+  // Delete User Data Action
   const handleDeleteAccount = () => {
     Alert.alert(
-      'Delete Account & Data',
-      'Are you sure you want to delete your account? This action is permanent and will remove all your active listings and associated personal data.',
+      'Delete Account & Personal Data',
+      'Are you sure you want to delete your account? This action is permanent and will remove all your active listings and personal data associated with this account.',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
           text: 'Delete Permanently', 
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
+            if (user) {
+              await supabase.from('listings').delete().eq('user_id', user.id);
+              await supabase.auth.signOut();
+              setUser(null);
+            }
             setShowSettingsModal(false);
-            Alert.alert('Account Deleted', 'Your account and associated data have been deleted successfully.');
+            Alert.alert('Account Deleted', 'Your account and associated data have been permanently deleted.');
           } 
         },
       ]
     );
   };
 
-  // Smooth Navigation Between Modals
   const openPrivacyPolicy = () => {
     setShowSettingsModal(false);
     setTimeout(() => {
@@ -160,6 +230,84 @@ export default function App() {
     }, 200);
   };
 
+  const openHistory = () => {
+    setShowSettingsModal(false);
+    setTimeout(() => {
+      setShowHistoryModal(true);
+    }, 200);
+  };
+
+  const closeHistory = () => {
+    setShowHistoryModal(false);
+    setTimeout(() => {
+      setShowSettingsModal(true);
+    }, 200);
+  };
+
+  // 1. Loading Screen while checking session
+  if (loadingSession) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerContent]}>
+        <StatusBar barStyle="light-content" />
+        <ActivityIndicator size="large" color="#F59E0B" />
+      </SafeAreaView>
+    );
+  }
+
+  // 2. Auth Gate Screen: Shown when user is not logged in
+  if (!user) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerContent]}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.authContainer}>
+          <Text style={styles.authLogo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
+          <Text style={styles.authSubtitle}>Peer-to-Peer Luggage Space Sharing</Text>
+
+          <View style={styles.authToggleRow}>
+            <TouchableOpacity
+              style={[styles.authTab, authMode === 'login' && styles.authTabActive]}
+              onPress={() => setAuthMode('login')}
+            >
+              <Text style={styles.authTabText}>Log In</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.authTab, authMode === 'signup' && styles.authTabActive]}
+              onPress={() => setAuthMode('signup')}
+            >
+              <Text style={styles.authTabText}>Sign Up</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Email Address"
+            placeholderTextColor="#8E8E93"
+            value={authEmail}
+            onChangeText={setAuthEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor="#8E8E93"
+            value={authPassword}
+            onChangeText={setAuthPassword}
+            secureTextEntry
+          />
+
+          <TouchableOpacity style={styles.submitButton} onPress={handleAuth}>
+            <Text style={styles.submitButtonText}>
+              {authMode === 'login' ? 'Log In to CarrySpace' : 'Create Account'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // 3. Main Dashboard Screen: Shown when user is authenticated
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -355,13 +503,31 @@ export default function App() {
       <Modal visible={showSettingsModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Settings & Privacy</Text>
+            <Text style={styles.modalTitle}>Settings & Account</Text>
+
+            <View style={styles.userBadge}>
+              <Text style={styles.userBadgeText}>Logged in as: {user.email}</Text>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.settingsRowBtn}
+              onPress={openHistory}
+            >
+              <Text style={styles.settingsRowText}>📦 View History & My Listings</Text>
+            </TouchableOpacity>
 
             <TouchableOpacity 
               style={styles.settingsRowBtn}
               onPress={openPrivacyPolicy}
             >
               <Text style={styles.settingsRowText}>📄 View Privacy Policy</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.settingsRowBtn, { backgroundColor: '#334155' }]}
+              onPress={handleSignOut}
+            >
+              <Text style={styles.settingsRowText}>🚪 Sign Out</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -376,6 +542,37 @@ export default function App() {
               onPress={() => setShowSettingsModal(false)}
             >
               <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* History & My Listings Modal */}
+      <Modal visible={showHistoryModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>My History & Listings</Text>
+            <ScrollView style={{ marginVertical: 12 }}>
+              {listings.filter((item) => item.user_id === user?.id).length === 0 ? (
+                <Text style={styles.privacyBody}>No past history or active listings found for your account.</Text>
+              ) : (
+                listings
+                  .filter((item) => item.user_id === user?.id)
+                  .map((item) => (
+                    <View key={item.id} style={[styles.feedCard, { backgroundColor: '#0F172A' }]}>
+                      <Text style={styles.feedName}>{item.route}</Text>
+                      <Text style={styles.feedDate}>Type: {item.type === 'sender' ? 'Shipment Request' : 'Space Offered'}</Text>
+                      <Text style={styles.feedDate}>Capacity: {item.capacity} • Price: {item.price}</Text>
+                      <Text style={styles.feedDate}>📅 {item.date}</Text>
+                    </View>
+                  ))
+              )}
+            </ScrollView>
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={closeHistory}
+            >
+              <Text style={styles.closeButtonText}>Back to Settings</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -416,6 +613,10 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0F1D' },
+  centerContent: { justifyContent: 'center', alignItems: 'center' },
+  authContainer: { width: '85%', backgroundColor: '#1E293B', padding: 24, borderRadius: 16 },
+  authLogo: { fontSize: 28, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center' },
+  authSubtitle: { color: '#94A3B8', fontSize: 13, textAlign: 'center', marginBottom: 24, marginTop: 4 },
   header: { 
     padding: 16, 
     flexDirection: 'row', 
@@ -472,4 +673,10 @@ const styles = StyleSheet.create({
   deleteBtn: { backgroundColor: '#451A1A', borderWidth: 1, borderColor: '#EF4444' },
   deleteBtnText: { color: '#EF4444', fontSize: 15, fontWeight: 'bold' },
   privacyBody: { color: '#94A3B8', fontSize: 13, lineHeight: 20 },
+  userBadge: { backgroundColor: '#10B981', padding: 10, borderRadius: 8, marginBottom: 12 },
+  userBadgeText: { color: '#FFFFFF', fontWeight: 'bold', textAlign: 'center', fontSize: 13 },
+  authToggleRow: { flexDirection: 'row', backgroundColor: '#0F172A', borderRadius: 8, marginBottom: 16, padding: 4 },
+  authTab: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 6 },
+  authTabActive: { backgroundColor: '#2563EB' },
+  authTabText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 13 },
 });
