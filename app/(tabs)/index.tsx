@@ -34,7 +34,7 @@ export default function App() {
   const [loadingSession, setLoadingSession] = useState(true);
 
   // Auth Screen State
-  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authMode, setAuthMode] = useState('login');
   const [authFullName, setAuthFullName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -204,11 +204,11 @@ export default function App() {
     });
   };
 
-  // Delete User Data Action
+  // Compliant Account & Data Deletion Action (Anonymizes records & revokes credentials)
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account & Personal Data',
-      'Are you sure you want to delete your account? This action is permanent and will remove all your active listings and personal data associated with this account.',
+      'Deleting your account permanently revokes login access and strips personal identification from your listings. Anonymized record logs are retained internally for legal compliance.',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -216,12 +216,26 @@ export default function App() {
           style: 'destructive',
           onPress: async () => {
             if (user) {
-              await supabase.from('listings').delete().eq('user_id', user.id);
+              // 1. Anonymize personal info attached to user's listings in public schema
+              await supabase
+                .from('listings')
+                .update({ 
+                  name: 'Anonymized User', 
+                  email: 'redacted@carryspace.app', 
+                  phone: '0000000000' 
+                })
+                .eq('user_id', user.id);
+
+              // 2. Call RPC function to purge auth credentials
+              await supabase.rpc('delete_user_account');
+
+              // 3. Sign out locally
               await supabase.auth.signOut();
               setUser(null);
+              setShowSettingsModal(false);
+              Alert.alert('Account Deleted', 'Your account credentials and personal identity details have been deleted.');
+              fetchListings();
             }
-            setShowSettingsModal(false);
-            Alert.alert('Account Deleted', 'Your account and associated data have been permanently deleted.');
           } 
         },
       ]
@@ -256,7 +270,6 @@ export default function App() {
     }, 200);
   };
 
-  // 1. Loading Screen while checking session
   if (loadingSession) {
     return (
       <SafeAreaView style={[styles.container, styles.centerContent]}>
@@ -266,7 +279,6 @@ export default function App() {
     );
   }
 
-  // 2. Auth Gate Screen: Shown when user is not logged in
   if (!user) {
     return (
       <SafeAreaView style={[styles.container, styles.centerContent]}>
@@ -329,10 +341,8 @@ export default function App() {
     );
   }
 
-  // Get User Name from Metadata
   const userGreetingName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
 
-  // 3. Main Dashboard Screen: Shown when user is authenticated
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -619,7 +629,7 @@ export default function App() {
                 <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>3. Limitation of Liability & Disclaimers:{'\n'}</Text>
                 CarrySpace, its owners, and developers act solely as a passive venue connecting users. CarrySpace is strictly NOT responsible or liable for any lost, stolen, damaged, or delayed items or packages arranged through the platform. Furthermore, CarrySpace, its owners, and developers are NOT responsible or liable for any payment of additional customs duties, import taxes, penalties, or border inspections. Users are solely responsible for declaring goods and complying with all local and international customs laws.{'\n\n'}
                 <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>4. Data Retention & Account Deletion:{'\n'}</Text>
-                You have full control over your personal data. You may request account and data deletion at any time directly through the Settings menu in this application.{'\n\n'}
+                You may request account deletion at any time directly through the Settings menu. Requesting account deletion revokes active login access and strips personal identity details from listings. Anonymized record logs are retained internally for audit, fraud prevention, and legal compliance purposes.{'\n\n'}
                 <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>5. Security & Contact:{'\n'}</Text>
                 We use industry-standard encryption protocols (via Supabase) to protect all submitted listings and personal data. For privacy inquiries, contact us at <Text style={{ color: '#F59E0B' }}>support.carryspace@gmail.com</Text>.
               </Text>
