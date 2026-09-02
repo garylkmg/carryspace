@@ -35,6 +35,7 @@ export default function App() {
 
   // Auth Screen State
   const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authFullName, setAuthFullName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
 
@@ -70,7 +71,6 @@ export default function App() {
     }
     setLoadingSession(false);
 
-    // Listen for auth state changes
     supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
@@ -91,15 +91,27 @@ export default function App() {
     }
 
     if (authMode === 'signup') {
+      if (!authFullName) {
+        Alert.alert('Incomplete Fields', 'Please enter your Full Name.');
+        return;
+      }
+
       const { data, error } = await supabase.auth.signUp({
         email: authEmail,
         password: authPassword,
+        options: {
+          data: {
+            full_name: authFullName,
+          },
+        },
       });
+
       if (error) {
         Alert.alert('Sign Up Error', error.message);
       } else {
         Alert.alert('Account Created', 'Your account has been created successfully!');
         setUser(data.user);
+        setAuthFullName('');
         setAuthEmail('');
         setAuthPassword('');
       }
@@ -278,6 +290,16 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
+          {authMode === 'signup' && (
+            <TextInput
+              style={styles.input}
+              placeholder="Full Name"
+              placeholderTextColor="#8E8E93"
+              value={authFullName}
+              onChangeText={setAuthFullName}
+            />
+          )}
+
           <TextInput
             style={styles.input}
             placeholder="Email Address"
@@ -307,6 +329,9 @@ export default function App() {
     );
   }
 
+  // Get User Name from Metadata
+  const userGreetingName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+
   // 3. Main Dashboard Screen: Shown when user is authenticated
   return (
     <SafeAreaView style={styles.container}>
@@ -314,7 +339,7 @@ export default function App() {
 
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.userGreeting}>Hello, {userGreetingName}</Text>
         <Text style={styles.logo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
         <TouchableOpacity 
           style={styles.settingsButton}
@@ -506,7 +531,8 @@ export default function App() {
             <Text style={styles.modalTitle}>Settings & Account</Text>
 
             <View style={styles.userBadge}>
-              <Text style={styles.userBadgeText}>Logged in as: {user.email}</Text>
+              <Text style={styles.userBadgeText}>Logged in as: {userGreetingName}</Text>
+              <Text style={[styles.userBadgeText, { fontSize: 11, color: '#94A3B8' }]}>{user.email}</Text>
             </View>
 
             <TouchableOpacity 
@@ -625,10 +651,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, 
     borderBottomColor: '#1E293B' 
   },
-  headerSpacer: { width: 24 },
-  logo: { fontSize: 22, fontWeight: 'bold', color: '#FFFFFF' },
+  userGreeting: { color: '#F59E0B', fontWeight: 'bold', fontSize: 13, flex: 1 },
+  logo: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center', flex: 1 },
   logoAccent: { color: '#F59E0B' },
-  settingsButton: { padding: 4 },
+  settingsButton: { padding: 4, flex: 1, alignItems: 'flex-end' },
   settingsIcon: { fontSize: 20 },
   toggleContainer: { flexDirection: 'row', margin: 16, backgroundColor: '#1E293B', borderRadius: 12, padding: 4 },
   toggleButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
@@ -673,7 +699,7 @@ const styles = StyleSheet.create({
   deleteBtn: { backgroundColor: '#451A1A', borderWidth: 1, borderColor: '#EF4444' },
   deleteBtnText: { color: '#EF4444', fontSize: 15, fontWeight: 'bold' },
   privacyBody: { color: '#94A3B8', fontSize: 13, lineHeight: 20 },
-  userBadge: { backgroundColor: '#10B981', padding: 10, borderRadius: 8, marginBottom: 12 },
+  userBadge: { backgroundColor: '#1E293B', padding: 10, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#334155' },
   userBadgeText: { color: '#FFFFFF', fontWeight: 'bold', textAlign: 'center', fontSize: 13 },
   authToggleRow: { flexDirection: 'row', backgroundColor: '#0F172A', borderRadius: 8, marginBottom: 16, padding: 4 },
   authTab: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 6 },
