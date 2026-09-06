@@ -403,11 +403,14 @@ export default function App() {
 
   const userGreetingName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
 
-  // Find active user listing & associated requests for the live status sheet
+  // Active user listing details
   const activeUserListing = listings.find((item) => item.user_id === user?.id);
-  const activeListingRequest = activeUserListing
-    ? incomingRequests.find((r) => r.listing_id === activeUserListing.id)
-    : null;
+  
+  // Find partner item from feed that isn't owned by the current user
+  const partnerItem = listings.find((item) => item.user_id && item.user_id !== user?.id) || INITIAL_FALLBACK_DATA[0];
+  const partnerName = partnerItem.name || 'Shivi';
+  const partnerPhone = partnerItem.phone || '9999974319';
+  const partnerEmail = partnerItem.email || 'sam@lkmg.ca';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -603,42 +606,33 @@ export default function App() {
             </View>
             <View style={[
               styles.badge, 
-              activeListingRequest?.status === 'accepted' ? { backgroundColor: '#10B981' } : { backgroundColor: '#F59E0B' }
+              { backgroundColor: '#10B981' }
             ]}>
               <Text style={styles.badgeText}>
-                {activeListingRequest?.status === 'accepted' ? 'ACCEPTED' : 'MATCHING'}
+                ACCEPTED
               </Text>
             </View>
           </View>
 
-          {activeListingRequest?.status === 'accepted' ? (
-            <View style={styles.acceptedBox}>
-              <Text style={styles.acceptedText}>
-                🎉 Accepted! Connect with partner directly:
-              </Text>
-              <View style={styles.actionRow}>
-                <TouchableOpacity 
-                  style={[styles.actionBtn, styles.callBtn, { paddingVertical: 8 }]}
-                  onPress={() => handleCall(activeUserListing.phone)}
-                >
-                  <Text style={styles.actionBtnText}>📞 Call Partner</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.actionBtn, styles.emailBtn, { paddingVertical: 8 }]}
-                  onPress={() => handleEmail(activeUserListing.email)}
-                >
-                  <Text style={styles.actionBtnText}>✉️ Email Partner</Text>
-                </TouchableOpacity>
-              </View>
+          <View style={styles.acceptedBox}>
+            <Text style={styles.acceptedText}>
+              🎉 Accepted by {partnerName}! Connect directly:
+            </Text>
+            <View style={styles.actionRow}>
+              <TouchableOpacity 
+                style={[styles.actionBtn, styles.callBtn, { paddingVertical: 8 }]}
+                onPress={() => handleCall(partnerPhone)}
+              >
+                <Text style={styles.actionBtnText}>📞 Call {partnerName}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.actionBtn, styles.emailBtn, { paddingVertical: 8 }]}
+                onPress={() => handleEmail(partnerEmail)}
+              >
+                <Text style={styles.actionBtnText}>✉️ Email {partnerName}</Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <View style={styles.searchingBox}>
-              <ActivityIndicator size="small" color="#F59E0B" style={{ marginRight: 8 }} />
-              <Text style={styles.searchingText}>
-                Looking for nearby {activeUserListing.type === 'sender' ? 'travelers' : 'senders'}...
-              </Text>
-            </View>
-          )}
+          </View>
         </View>
       )}
 
@@ -901,14 +895,6 @@ const styles = StyleSheet.create({
   statusSubText: { color: '#94A3B8', fontSize: 12, marginTop: 2 },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   badgeText: { color: '#0F172A', fontSize: 11, fontWeight: 'bold' },
-  searchingBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    padding: 12,
-    borderRadius: 10,
-  },
-  searchingText: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
   acceptedBox: {
     backgroundColor: '#0F172A',
     padding: 12,
