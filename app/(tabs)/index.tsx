@@ -403,6 +403,12 @@ export default function App() {
 
   const userGreetingName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
 
+  // Find active user listing & associated requests for the live status sheet
+  const activeUserListing = listings.find((item) => item.user_id === user?.id);
+  const activeListingRequest = activeUserListing
+    ? incomingRequests.find((r) => r.listing_id === activeUserListing.id)
+    : null;
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -439,7 +445,7 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, activeUserListing ? { paddingBottom: 160 } : { paddingBottom: 24 }]}>
         {/* Form Card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>
@@ -580,6 +586,61 @@ export default function App() {
             );
           })}
       </ScrollView>
+
+      {/* Floating Bottom Status Sheet (Rapido-style) */}
+      {activeUserListing && (
+        <View style={styles.bottomStatusSheet}>
+          <View style={styles.sheetHandle} />
+          
+          <View style={styles.statusHeaderRow}>
+            <View>
+              <Text style={styles.statusRouteText}>
+                {activeUserListing.type === 'sender' ? '📦 Shipment' : '✈️ Flight'}: {activeUserListing.route}
+              </Text>
+              <Text style={styles.statusSubText}>
+                {activeUserListing.capacity} • {activeUserListing.price}
+              </Text>
+            </View>
+            <View style={[
+              styles.badge, 
+              activeListingRequest?.status === 'accepted' ? { backgroundColor: '#10B981' } : { backgroundColor: '#F59E0B' }
+            ]}>
+              <Text style={styles.badgeText}>
+                {activeListingRequest?.status === 'accepted' ? 'ACCEPTED' : 'MATCHING'}
+              </Text>
+            </View>
+          </View>
+
+          {activeListingRequest?.status === 'accepted' ? (
+            <View style={styles.acceptedBox}>
+              <Text style={styles.acceptedText}>
+                🎉 Accepted! Connect with partner directly:
+              </Text>
+              <View style={styles.actionRow}>
+                <TouchableOpacity 
+                  style={[styles.actionBtn, styles.callBtn, { paddingVertical: 8 }]}
+                  onPress={() => handleCall(activeUserListing.phone)}
+                >
+                  <Text style={styles.actionBtnText}>📞 Call Partner</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.actionBtn, styles.emailBtn, { paddingVertical: 8 }]}
+                  onPress={() => handleEmail(activeUserListing.email)}
+                >
+                  <Text style={styles.actionBtnText}>✉️ Email Partner</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.searchingBox}>
+              <ActivityIndicator size="small" color="#F59E0B" style={{ marginRight: 8 }} />
+              <Text style={styles.searchingText}>
+                Looking for nearby {activeUserListing.type === 'sender' ? 'travelers' : 'senders'}...
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {/* Actionable Contact Modal */}
       <Modal visible={selectedListing !== null} transparent animationType="slide">
@@ -780,7 +841,7 @@ const styles = StyleSheet.create({
   activeToggle: { backgroundColor: '#2563EB' },
   toggleText: { color: '#94A3B8', fontWeight: '600' },
   activeToggleText: { color: '#FFFFFF' },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 24 },
+  scrollContent: { paddingHorizontal: 16 },
   card: { backgroundColor: '#1E293B', borderRadius: 16, padding: 16, marginBottom: 24 },
   cardTitle: { color: '#F8FAFC', fontSize: 13, fontWeight: '700', marginBottom: 16 },
   input: { backgroundColor: '#0F172A', borderRadius: 8, padding: 12, color: '#FFFFFF', marginBottom: 12 },
@@ -801,12 +862,66 @@ const styles = StyleSheet.create({
   feedDate: { color: '#64748B', fontSize: 12, marginBottom: 12 },
   contactButton: { backgroundColor: '#2563EB', padding: 10, borderRadius: 8, alignItems: 'center' },
   contactButtonText: { color: '#FFFFFF', fontWeight: '600' },
+
+  // Bottom Status Sheet Styles (Rapido Style)
+  bottomStatusSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#1E293B',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: '#475569',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  statusHeaderRow: {
+    flexDirection: 'row',
+    justify: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  statusRouteText: { color: '#FFFFFF', fontSize: 15, fontWeight: 'bold' },
+  statusSubText: { color: '#94A3B8', fontSize: 12, marginTop: 2 },
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  badgeText: { color: '#0F172A', fontSize: 11, fontWeight: 'bold' },
+  searchingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    padding: 12,
+    borderRadius: 10,
+  },
+  searchingText: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
+  acceptedBox: {
+    backgroundColor: '#0F172A',
+    padding: 12,
+    borderRadius: 10,
+  },
+  acceptedText: { color: '#10B981', fontSize: 13, fontWeight: 'bold', marginBottom: 8 },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { backgroundColor: '#1E293B', padding: 24, borderRadius: 16, width: '85%' },
   modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
   modalName: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   modalSub: { color: '#94A3B8', fontSize: 14, marginBottom: 16 },
-  actionRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
   actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginHorizontal: 4 },
   callBtn: { backgroundColor: '#10B981' },
   emailBtn: { backgroundColor: '#2563EB' },
