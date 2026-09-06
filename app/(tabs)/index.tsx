@@ -22,10 +22,10 @@ const SUPABASE_ANON_KEY = 'sb_publishable_s4Rr_m0SjqiBT6DVptBD0w_jh01a5HX';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const INITIAL_FALLBACK_DATA = [
-  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$184', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler' },
-  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$120', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler' },
-  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$150', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender' },
-  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$60', route: 'SFO ➔ CDG', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender' },
+  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$184', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler', user_id: 'sample1' },
+  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$120', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler', user_id: 'sample2' },
+  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$150', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender', user_id: 'sample3' },
+  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$60', route: 'SFO ➔ CDG', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender', user_id: 'sample4' },
 ];
 
 export default function App() {
@@ -52,8 +52,10 @@ export default function App() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dateText, setDateText] = useState('');
 
-  // Feed & Modals State
+  // Feed, Requests & Modals State
   const [listings, setListings] = useState(INITIAL_FALLBACK_DATA);
+  const [userRequests, setUserRequests] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
   const [selectedListing, setSelectedListing] = useState(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
@@ -63,6 +65,12 @@ export default function App() {
     checkActiveSession();
     fetchListings();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchUserRequests();
+    }
+  }, [user]);
 
   const checkActiveSession = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -83,6 +91,24 @@ export default function App() {
     }
   };
 
+  const fetchUserRequests = async () => {
+    if (!user) return;
+    
+    // Requests initiated by current user
+    const { data: sentReqs } = await supabase
+      .from('requests')
+      .select('*')
+      .eq('requester_id', user.id);
+    if (sentReqs) setUserRequests(sentReqs);
+
+    // Requests received for current user's listings
+    const { data: recReqs } = await supabase
+      .from('requests')
+      .select('*, listings(*)')
+      .eq('owner_id', user.id);
+    if (recReqs) setIncomingRequests(recReqs);
+  };
+
   // Auth Actions
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
@@ -99,11 +125,7 @@ export default function App() {
       const { data, error } = await supabase.auth.signUp({
         email: authEmail,
         password: authPassword,
-        options: {
-          data: {
-            full_name: authFullName,
-          },
-        },
+        options: { data: { full_name: authFullName } },
       });
 
       if (error) {
@@ -190,6 +212,61 @@ export default function App() {
     }
   };
 
+  // Two-Way Accept & Contact Request Handler
+  const handleAcceptAndContact = async (item) => {
+    if (!user) return;
+
+    if (item.user_id === user.id) {
+      Alert.alert('Notice', 'You cannot request your own listing.');
+      return;
+    }
+
+    const existingRequest = userRequests.find((r) => r.listing_id === item.id);
+
+    if (existingRequest) {
+      if (existingRequest.status === 'pending') {
+        Alert.alert('Status: Pending', 'You have already sent a request. Waiting for counter-acceptance by the listing owner.');
+      } else if (existingRequest.status === 'accepted') {
+        setSelectedListing(item);
+      } else {
+        Alert.alert('Request Declined', 'The owner has declined this request.');
+      }
+      return;
+    }
+
+    // Submit new request
+    const { error } = await supabase.from('requests').insert([
+      {
+        listing_id: item.id,
+        requester_id: user.id,
+        owner_id: item.user_id,
+        status: 'pending',
+      },
+    ]);
+
+    if (error) {
+      Alert.alert('Error', error.message);
+    } else {
+      Alert.alert('Request Sent!', 'Acceptance request sent. Direct contact info will unlock once counter-accepted by the owner.');
+      fetchUserRequests();
+    }
+  };
+
+  // Owner Response Actions
+  const handleUpdateRequestStatus = async (requestId, newStatus) => {
+    const { error } = await supabase
+      .from('requests')
+      .update({ status: newStatus })
+      .eq('id', requestId);
+
+    if (error) {
+      Alert.alert('Error', error.message);
+    } else {
+      Alert.alert('Updated', `Request ${newStatus} successfully.`);
+      fetchUserRequests();
+    }
+  };
+
   const handleCall = (phoneNumber) => {
     if (!phoneNumber) return;
     Linking.openURL(`tel:${phoneNumber}`).catch(() => {
@@ -204,7 +281,6 @@ export default function App() {
     });
   };
 
-  // Compliant Account & Data Deletion Action (Anonymizes records & revokes credentials)
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account & Personal Data',
@@ -216,20 +292,12 @@ export default function App() {
           style: 'destructive',
           onPress: async () => {
             if (user) {
-              // 1. Anonymize personal info attached to user's listings in public schema
               await supabase
                 .from('listings')
-                .update({ 
-                  name: 'Anonymized User', 
-                  email: 'redacted@carryspace.app', 
-                  phone: '0000000000' 
-                })
+                .update({ name: 'Anonymized User', email: 'redacted@carryspace.app', phone: '0000000000' })
                 .eq('user_id', user.id);
 
-              // 2. Call RPC function to purge auth credentials
               await supabase.rpc('delete_user_account');
-
-              // 3. Sign out locally
               await supabase.auth.signOut();
               setUser(null);
               setShowSettingsModal(false);
@@ -244,30 +312,22 @@ export default function App() {
 
   const openPrivacyPolicy = () => {
     setShowSettingsModal(false);
-    setTimeout(() => {
-      setShowPrivacyModal(true);
-    }, 200);
+    setTimeout(() => setShowPrivacyModal(true), 200);
   };
 
   const closePrivacyPolicy = () => {
     setShowPrivacyModal(false);
-    setTimeout(() => {
-      setShowSettingsModal(true);
-    }, 200);
+    setTimeout(() => setShowSettingsModal(true), 200);
   };
 
   const openHistory = () => {
     setShowSettingsModal(false);
-    setTimeout(() => {
-      setShowHistoryModal(true);
-    }, 200);
+    setTimeout(() => setShowHistoryModal(true), 200);
   };
 
   const closeHistory = () => {
     setShowHistoryModal(false);
-    setTimeout(() => {
-      setShowSettingsModal(true);
-    }, 200);
+    setTimeout(() => setShowSettingsModal(true), 200);
   };
 
   if (loadingSession) {
@@ -284,7 +344,7 @@ export default function App() {
       <SafeAreaView style={[styles.container, styles.centerContent]}>
         <StatusBar barStyle="light-content" />
         <View style={styles.authContainer}>
-          <Text style={styles.authLogo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
+          <Text style={styles.authLogo} numberOfLines={1}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
           <Text style={styles.authSubtitle}>Peer-to-Peer Luggage Space Sharing</Text>
 
           <View style={styles.authToggleRow}>
@@ -349,8 +409,12 @@ export default function App() {
 
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.userGreeting}>Hello, {userGreetingName}</Text>
-        <Text style={styles.logo}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
+        <Text style={styles.userGreeting} numberOfLines={1}>Hello, {userGreetingName}</Text>
+        <View style={styles.logoContainer}>
+          <Text style={styles.logo} numberOfLines={1} adjustsFontSizeToFit>
+            CARRY<Text style={styles.logoAccent}>SPACE</Text>
+          </Text>
+        </View>
         <TouchableOpacity 
           style={styles.settingsButton}
           onPress={() => setShowSettingsModal(true)}
@@ -472,39 +536,56 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Dynamic Database Feed */}
+        {/* Dynamic Feed with Status Button */}
         <Text style={styles.sectionTitle}>
           {role === 'sender' ? 'Available Travelers' : 'Package Requests'}
         </Text>
 
         {listings
           .filter((item) => item.type === (role === 'sender' ? 'traveler' : 'sender'))
-          .map((item) => (
-            <View key={item.id} style={styles.feedCard}>
-              <View style={styles.feedHeader}>
-                <Text style={styles.feedName}>{item.name} • <Text style={styles.feedWeight}>{item.capacity}</Text></Text>
-                <Text style={styles.feedPrice}>{item.price}</Text>
-              </View>
-              <Text style={styles.feedRoute}>{item.route}</Text>
-              <Text style={styles.feedDate}>📅 {item.date}</Text>
+          .map((item) => {
+            const req = userRequests.find((r) => r.listing_id === item.id);
+            let btnLabel = 'Accept & Contact';
+            let btnStyle = styles.contactButton;
 
-              <TouchableOpacity
-                style={styles.contactButton}
-                onPress={() => setSelectedListing(item)}
-              >
-                <Text style={styles.contactButtonText}>
-                  {role === 'sender' ? 'Contact Traveler' : 'Contact Sender'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))}
+            if (req) {
+              if (req.status === 'pending') {
+                btnLabel = '⏳ Pending Acceptance';
+                btnStyle = [styles.contactButton, { backgroundColor: '#D97706' }];
+              } else if (req.status === 'accepted') {
+                btnLabel = '✅ Accepted - View Contact';
+                btnStyle = [styles.contactButton, { backgroundColor: '#10B981' }];
+              } else {
+                btnLabel = '❌ Request Declined';
+                btnStyle = [styles.contactButton, { backgroundColor: '#EF4444' }];
+              }
+            }
+
+            return (
+              <View key={item.id} style={styles.feedCard}>
+                <View style={styles.feedHeader}>
+                  <Text style={styles.feedName}>{item.name} • <Text style={styles.feedWeight}>{item.capacity}</Text></Text>
+                  <Text style={styles.feedPrice}>{item.price}</Text>
+                </View>
+                <Text style={styles.feedRoute}>{item.route}</Text>
+                <Text style={styles.feedDate}>📅 {item.date}</Text>
+
+                <TouchableOpacity
+                  style={btnStyle}
+                  onPress={() => handleAcceptAndContact(item)}
+                >
+                  <Text style={styles.contactButtonText}>{btnLabel}</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
       </ScrollView>
 
       {/* Actionable Contact Modal */}
       <Modal visible={selectedListing !== null} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Direct Contact</Text>
+            <Text style={styles.modalTitle}>Direct Contact Details</Text>
             {selectedListing && (
               <>
                 <Text style={styles.modalName}>{selectedListing.name}</Text>
@@ -549,7 +630,7 @@ export default function App() {
               style={styles.settingsRowBtn}
               onPress={openHistory}
             >
-              <Text style={styles.settingsRowText}>📦 View History & My Listings</Text>
+              <Text style={styles.settingsRowText}>📦 View History & Incoming Requests</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -583,14 +664,45 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* History & My Listings Modal */}
+      {/* History & Counter-Acceptance Requests Modal */}
       <Modal visible={showHistoryModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { maxHeight: '80%' }]}>
-            <Text style={styles.modalTitle}>My History & Listings</Text>
-            <ScrollView style={{ marginVertical: 12 }}>
+            <Text style={styles.modalTitle}>Incoming Acceptance Requests</Text>
+            
+            <ScrollView style={{ marginVertical: 8, maxHeight: 180 }}>
+              {incomingRequests.filter((r) => r.status === 'pending').length === 0 ? (
+                <Text style={styles.privacyBody}>No pending incoming requests.</Text>
+              ) : (
+                incomingRequests
+                  .filter((r) => r.status === 'pending')
+                  .map((req) => (
+                    <View key={req.id} style={[styles.feedCard, { backgroundColor: '#0F172A', marginBottom: 8 }]}>
+                      <Text style={styles.feedName}>Request for: {req.listings?.route || 'Listing'}</Text>
+                      <Text style={styles.feedDate}>Status: Pending Counter-Acceptance</Text>
+                      <View style={styles.actionRow}>
+                        <TouchableOpacity 
+                          style={[styles.actionBtn, { backgroundColor: '#10B981', paddingVertical: 6 }]}
+                          onPress={() => handleUpdateRequestStatus(req.id, 'accepted')}
+                        >
+                          <Text style={styles.actionBtnText}>Accept</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                          style={[styles.actionBtn, { backgroundColor: '#EF4444', paddingVertical: 6 }]}
+                          onPress={() => handleUpdateRequestStatus(req.id, 'declined')}
+                        >
+                          <Text style={styles.actionBtnText}>Decline</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))
+              )}
+            </ScrollView>
+
+            <Text style={[styles.modalTitle, { fontSize: 16, marginTop: 12 }]}>My History & Listings</Text>
+            <ScrollView style={{ marginVertical: 8 }}>
               {listings.filter((item) => item.user_id === user?.id).length === 0 ? (
-                <Text style={styles.privacyBody}>No past history or active listings found for your account.</Text>
+                <Text style={styles.privacyBody}>No past history found.</Text>
               ) : (
                 listings
                   .filter((item) => item.user_id === user?.id)
@@ -604,10 +716,8 @@ export default function App() {
                   ))
               )}
             </ScrollView>
-            <TouchableOpacity 
-              style={styles.closeButton} 
-              onPress={closeHistory}
-            >
+
+            <TouchableOpacity style={styles.closeButton} onPress={closeHistory}>
               <Text style={styles.closeButtonText}>Back to Settings</Text>
             </TouchableOpacity>
           </View>
@@ -634,10 +744,7 @@ export default function App() {
                 We use industry-standard encryption protocols (via Supabase) to protect all submitted listings and personal data. For privacy inquiries, contact us at <Text style={{ color: '#F59E0B' }}>support.carryspace@gmail.com</Text>.
               </Text>
             </ScrollView>
-            <TouchableOpacity 
-              style={styles.closeButton} 
-              onPress={closePrivacyPolicy}
-            >
+            <TouchableOpacity style={styles.closeButton} onPress={closePrivacyPolicy}>
               <Text style={styles.closeButtonText}>Back to Settings</Text>
             </TouchableOpacity>
           </View>
@@ -654,7 +761,8 @@ const styles = StyleSheet.create({
   authLogo: { fontSize: 28, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center' },
   authSubtitle: { color: '#94A3B8', fontSize: 13, textAlign: 'center', marginBottom: 24, marginTop: 4 },
   header: { 
-    padding: 16, 
+    paddingHorizontal: 16, 
+    paddingVertical: 12,
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
@@ -662,9 +770,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1E293B' 
   },
   userGreeting: { color: '#F59E0B', fontWeight: 'bold', fontSize: 13, flex: 1 },
-  logo: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center', flex: 1 },
+  logoContainer: { flex: 2, alignItems: 'center', justifyContent: 'center' },
+  logo: { fontSize: 18, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center' },
   logoAccent: { color: '#F59E0B' },
-  settingsButton: { padding: 4, flex: 1, alignItems: 'flex-end' },
+  settingsButton: { flex: 1, alignItems: 'flex-end', justifyContent: 'center' },
   settingsIcon: { fontSize: 20 },
   toggleContainer: { flexDirection: 'row', margin: 16, backgroundColor: '#1E293B', borderRadius: 12, padding: 4 },
   toggleButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
