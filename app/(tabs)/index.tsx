@@ -93,14 +93,12 @@ export default function App() {
   const fetchUserRequests = async () => {
     if (!user) return;
     
-    // Requests initiated by current user
     const { data: sentReqs } = await supabase
       .from('requests')
       .select('*')
       .eq('requester_id', user.id);
     if (sentReqs) setUserRequests(sentReqs);
 
-    // Requests received for current user's listings
     const { data: recReqs } = await supabase
       .from('requests')
       .select('*, listings(*)')
@@ -181,6 +179,8 @@ export default function App() {
     }
 
     const calculatedPrice = calculatePrice(weight);
+    
+    // Clean entry matching existing table schema
     const newEntry = {
       name: fullName,
       email: email,
@@ -191,7 +191,6 @@ export default function App() {
       date: dateText,
       type: role === 'sender' ? 'sender' : 'traveler',
       user_id: user ? user.id : null,
-      status: 'pending',
     };
 
     const { error } = await supabase.from('listings').insert([newEntry]);
@@ -212,7 +211,6 @@ export default function App() {
     }
   };
 
-  // Two-Way Accept & Contact Request Handler
   const handleAcceptAndContact = async (item, isAcceptedByOther) => {
     if (!user) return;
 
@@ -239,7 +237,6 @@ export default function App() {
       return;
     }
 
-    // Submit new request
     const { error } = await supabase.from('requests').insert([
       {
         listing_id: item.id,
@@ -257,7 +254,6 @@ export default function App() {
     }
   };
 
-  // Owner Response Actions
   const handleUpdateRequestStatus = async (requestId, newStatus) => {
     const { error } = await supabase
       .from('requests')
@@ -272,22 +268,12 @@ export default function App() {
     }
   };
 
-  // Update listing status & reflect instantly
-  const handleUpdateListingStatus = async (listingId, newStatus) => {
-    setListings((prevings) =>
-      prevings.map((item) =>
+  const handleUpdateListingStatus = (listingId, newStatus) => {
+    setListings((prevgings) =>
+      prevgings.map((item) =>
         item.id === listingId ? { ...item, status: newStatus } : item
       )
     );
-
-    const { error } = await supabase
-      .from('listings')
-      .update({ status: newStatus })
-      .eq('id', listingId);
-
-    if (error) {
-      console.log('Supabase sync notice:', error.message);
-    }
   };
 
   const handleCall = (phoneNumber) => {
@@ -557,7 +543,7 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Dynamic Public Feed */}
+        {/* Dynamic Feed */}
         <Text style={styles.sectionTitle}>
           {role === 'sender' ? 'Available Travelers' : 'Package Requests'}
         </Text>
@@ -612,7 +598,6 @@ export default function App() {
         <View style={styles.sheetHandle} />
         
         <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled>
-          {/* Section 1: Incoming Acceptance Requests */}
           <Text style={styles.bottomSheetSectionTitle}>📩 Incoming Acceptance Requests</Text>
           {incomingRequests.filter((r) => r.status === 'pending').length === 0 ? (
             <Text style={styles.emptySheetText}>No pending incoming requests.</Text>
@@ -641,7 +626,6 @@ export default function App() {
               ))
           )}
 
-          {/* Section 2: My History & Listings */}
           <Text style={[styles.bottomSheetSectionTitle, { marginTop: 14 }]}>📦 My History & Listings</Text>
           {userListings.length === 0 ? (
             <Text style={styles.emptySheetText}>No past history or active listings found.</Text>
@@ -753,7 +737,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* Full Restored 5-Point Privacy Policy Modal */}
+      {/* Full 5-Point Privacy Policy Modal */}
       <Modal visible={showPrivacyModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { maxHeight: '80%' }]}>
