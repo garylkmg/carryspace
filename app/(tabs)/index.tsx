@@ -22,10 +22,10 @@ const SUPABASE_ANON_KEY = 'sb_publishable_s4Rr_m0SjqiBT6DVptBD0w_jh01a5HX';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const INITIAL_FALLBACK_DATA = [
-  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$184', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler', user_id: 'sample1', status: 'pending' },
-  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$120', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler', user_id: 'sample2', status: 'pending' },
-  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$150', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender', user_id: 'sample3', status: 'pending' },
-  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$60', route: 'SFO ➔ CDG', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender', user_id: 'sample4', status: 'pending' },
+  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$230', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler', user_id: 'sample1', status: 'pending' },
+  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$105', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler', user_id: 'sample2', status: 'pending' },
+  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$105', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender', user_id: 'sample3', status: 'pending' },
+  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$20', route: 'SFO ➔ LAX', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender', user_id: 'sample4', status: 'pending' },
 ];
 
 export default function App() {
@@ -59,6 +59,9 @@ export default function App() {
   const [selectedListing, setSelectedListing] = useState(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+
+  // Searching Animation State
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     checkActiveSession();
@@ -167,9 +170,31 @@ export default function App() {
     }
   };
 
-  const calculatePrice = (kg) => {
+  // Distance & Commercial Benchmark Rate Calculation (50% Off Commercial Cargo)
+  const calculatePrice = (kg, from, to) => {
     const weightNum = parseFloat(kg) || 0;
-    return weightNum * 8;
+    if (!weightNum) return 0;
+
+    const origin = (from || '').toUpperCase().trim();
+    const destination = (to || '').toUpperCase().trim();
+
+    // Tier 1: Short-Haul / Domestic (50% of $8/kg commercial) -> $4/kg
+    let ratePerKg = 4;
+
+    // Tier 3: Long-Haul Intercontinental (50% of $20/kg commercial) -> $10/kg
+    const longHaulAirports = ['DEL', 'BOM', 'BLR', 'YEG', 'YYZ', 'YVR', 'SYD', 'MEL'];
+    const isLongHaul = 
+      longHaulAirports.includes(origin) || 
+      longHaulAirports.includes(destination);
+
+    if (isLongHaul) {
+      ratePerKg = 10;
+    } else if (origin !== destination) {
+      // Tier 2: Medium-Haul Transatlantic / Regional (50% of $14/kg commercial) -> $7/kg
+      ratePerKg = 7;
+    }
+
+    return weightNum * ratePerKg;
   };
 
   const handleSubmit = async () => {
@@ -178,9 +203,8 @@ export default function App() {
       return;
     }
 
-    const calculatedPrice = calculatePrice(weight);
+    const calculatedPrice = calculatePrice(weight, fromLocation, toLocation);
     
-    // Clean entry matching existing table schema
     const newEntry = {
       name: fullName,
       email: email,
@@ -208,6 +232,12 @@ export default function App() {
       setDateText('');
       setShowDatePicker(false);
       fetchListings();
+
+      // Trigger 5-Second Searching Buffering Animation
+      setIsSearching(true);
+      setTimeout(() => {
+        setIsSearching(false);
+      }, 5000);
     }
   };
 
@@ -407,6 +437,11 @@ export default function App() {
     : 'User';
 
   const userListings = listings.filter((item) => item.user_id === user?.id);
+  const activeUserListing = userListings.length > 0 ? userListings[0] : null;
+
+  // Flexible Date Partner Lookup for active user listing
+  const targetType = activeUserListing?.type === 'sender' ? 'traveler' : 'sender';
+  const partnerMatch = listings.find((item) => item.type === targetType && item.user_id !== user?.id) || INITIAL_FALLBACK_DATA[0];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -446,7 +481,7 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: 280 }]}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: 320 }]}>
         {/* Form Card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>
@@ -543,7 +578,7 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Dynamic Feed */}
+        {/* Dynamic Public Feed */}
         <Text style={styles.sectionTitle}>
           {role === 'sender' ? 'Available Travelers' : 'Package Requests'}
         </Text>
@@ -597,7 +632,51 @@ export default function App() {
       <View style={styles.bottomStatusSheet}>
         <View style={styles.sheetHandle} />
         
-        <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled>
+        {/* Buffering Search Box */}
+        {activeUserListing && (
+          <View style={styles.searchingContainer}>
+            {isSearching ? (
+              <View style={styles.bufferingBox}>
+                <ActivityIndicator size="small" color="#F59E0B" style={{ marginRight: 10 }} />
+                <Text style={styles.bufferingText}>
+                  {activeUserListing.type === 'sender'
+                    ? 'Searching for nearby travelers...'
+                    : 'Searching for nearby delivery requests...'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.matchCard}>
+                <View style={styles.feedHeader}>
+                  <Text style={styles.matchTitle}>
+                    🎉 Match Found ({partnerMatch.route})
+                  </Text>
+                  <Text style={{ color: '#10B981', fontWeight: 'bold', fontSize: 11 }}>ACCEPTED</Text>
+                </View>
+                <Text style={styles.matchDetails}>
+                  Partner: <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>{partnerMatch.name}</Text> • {partnerMatch.capacity} • {partnerMatch.price}
+                </Text>
+                <Text style={styles.matchSubText}>📅 Route date flexible: {partnerMatch.date}</Text>
+
+                <View style={[styles.actionRow, { marginTop: 8 }]}>
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, styles.callBtn, { paddingVertical: 6 }]}
+                    onPress={() => handleCall(partnerMatch.phone)}
+                  >
+                    <Text style={styles.actionBtnText}>📞 Call {partnerMatch.name.split(' ')[0]}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, styles.emailBtn, { paddingVertical: 6 }]}
+                    onPress={() => handleEmail(partnerMatch.email)}
+                  >
+                    <Text style={styles.actionBtnText}>✉️ Email {partnerMatch.name.split(' ')[0]}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
+        <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
           <Text style={styles.bottomSheetSectionTitle}>📩 Incoming Acceptance Requests</Text>
           {incomingRequests.filter((r) => r.status === 'pending').length === 0 ? (
             <Text style={styles.emptySheetText}>No pending incoming requests.</Text>
@@ -839,6 +918,28 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 8,
   },
+  searchingContainer: { marginBottom: 12 },
+  bufferingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  bufferingText: { color: '#F59E0B', fontSize: 13, fontWeight: '600' },
+  matchCard: {
+    backgroundColor: '#0F172A',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  matchTitle: { color: '#F59E0B', fontSize: 13, fontWeight: 'bold' },
+  matchDetails: { color: '#94A3B8', fontSize: 12, marginTop: 4 },
+  matchSubText: { color: '#64748B', fontSize: 11, marginTop: 2 },
+
   bottomSheetSectionTitle: { color: '#F59E0B', fontSize: 14, fontWeight: 'bold', marginBottom: 8 },
   emptySheetText: { color: '#64748B', fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
   innerCard: { backgroundColor: '#0F172A', borderRadius: 10, padding: 10, marginBottom: 8 },
