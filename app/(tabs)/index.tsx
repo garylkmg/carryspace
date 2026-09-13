@@ -13,6 +13,9 @@ import {
   Platform,
   Linking,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createClient } from '@supabase/supabase-js';
@@ -22,10 +25,10 @@ const SUPABASE_ANON_KEY = 'sb_publishable_s4Rr_m0SjqiBT6DVptBD0w_jh01a5HX';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const INITIAL_FALLBACK_DATA = [
-  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$230', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler', user_id: 'sample1', status: 'pending' },
-  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$105', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler', user_id: 'sample2', status: 'pending' },
-  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$105', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender', user_id: 'sample3', status: 'pending' },
-  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$20', route: 'SFO ➔ LAX', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender', user_id: 'sample4', status: 'pending' },
+  { id: 'd1', name: 'Shivi', capacity: '23 kg', price: '$230', route: 'DEL ➔ YEG', date: '09-09-2026', email: 'sam@lkmg.ca', phone: '9999974319', type: 'traveler', user_id: 'sample1', status: 'pending', description: 'Personal baggage space', item_category: 'Customs-Free Items' },
+  { id: 'd2', name: 'Sarah Miller', capacity: '15 kg', price: '$105', route: 'JFK ➔ LHR', date: 'Sep 02, 2026', email: 'sarah@example.com', phone: '1234567890', type: 'traveler', user_id: 'sample2', status: 'pending', description: 'Clothes and shoes', item_category: 'Customs-Free Items' },
+  { id: 'd3', name: 'Gary', capacity: '15 kg', price: '$131', route: 'DEL ➔ LHR', date: '12-09-2026', email: 'gary@lkmg.ca', phone: '9266304319', type: 'sender', user_id: 'sample3', status: 'pending', description: 'Sealed camera lenses & laptop', item_category: 'Customs Declaration Required' },
+  { id: 'd4', name: 'Alex Johnson', capacity: '5 kg', price: '$30', route: 'SFO ➔ LAX', date: 'Sep 10, 2026', email: 'alex@example.com', phone: '9876543210', type: 'sender', user_id: 'sample4', status: 'pending', description: 'Prescription herbal medicine', item_category: 'Restricted Items' },
 ];
 
 export default function App() {
@@ -46,10 +49,13 @@ export default function App() {
   const [fromLocation, setFromLocation] = useState('');
   const [toLocation, setToLocation] = useState('');
   const [weight, setWeight] = useState('');
+  const [description, setDescription] = useState('');
+  const [itemCategory, setItemCategory] = useState('Customs-Free Items');
 
-  // Date Picker State
+  // Modal States
   const [date, setDate] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showDatePickerModal, setShowDatePickerModal] = useState(false);
+  const [showGoodsModal, setShowGoodsModal] = useState(false);
   const [dateText, setDateText] = useState('');
 
   // Feed, Requests & Modals State
@@ -160,50 +166,60 @@ export default function App() {
   };
 
   const handleDateChange = (event, selectedDate) => {
-    if (Platform.OS === 'android') {
-      setShowDatePicker(false);
-    }
     if (selectedDate) {
       setDate(selectedDate);
       const formattedDate = selectedDate.toISOString().split('T')[0];
       setDateText(formattedDate);
     }
+    if (Platform.OS === 'android') {
+      setShowDatePickerModal(false);
+    }
   };
 
-  // Distance & Commercial Benchmark Rate Calculation (50% Off Commercial Cargo)
-  const calculatePrice = (kg, from, to) => {
+  const confirmDateSelection = () => {
+    if (!dateText) {
+      const formattedDate = date.toISOString().split('T')[0];
+      setDateText(formattedDate);
+    }
+    setShowDatePickerModal(false);
+  };
+
+  // Distance & Customs Risk-Adjusted Pricing Calculation
+  const calculatePrice = (kg, from, to, category) => {
     const weightNum = parseFloat(kg) || 0;
     if (!weightNum) return 0;
 
     const origin = (from || '').toUpperCase().trim();
     const destination = (to || '').toUpperCase().trim();
 
-    // Tier 1: Short-Haul / Domestic (50% of $8/kg commercial) -> $4/kg
-    let ratePerKg = 4;
-
-    // Tier 3: Long-Haul Intercontinental (50% of $20/kg commercial) -> $10/kg
+    let baseRatePerKg = 4;
     const longHaulAirports = ['DEL', 'BOM', 'BLR', 'YEG', 'YYZ', 'YVR', 'SYD', 'MEL'];
-    const isLongHaul = 
-      longHaulAirports.includes(origin) || 
-      longHaulAirports.includes(destination);
+    const isLongHaul = longHaulAirports.includes(origin) || longHaulAirports.includes(destination);
 
     if (isLongHaul) {
-      ratePerKg = 10;
+      baseRatePerKg = 10;
     } else if (origin !== destination) {
-      // Tier 2: Medium-Haul Transatlantic / Regional (50% of $14/kg commercial) -> $7/kg
-      ratePerKg = 7;
+      baseRatePerKg = 7;
     }
 
-    return weightNum * ratePerKg;
+    let rawPrice = weightNum * baseRatePerKg;
+
+    if (category === 'Customs Declaration Required') {
+      rawPrice *= 1.25;
+    } else if (category === 'Restricted Items') {
+      rawPrice *= 1.50;
+    }
+
+    return Math.round(rawPrice);
   };
 
   const handleSubmit = async () => {
-    if (!fullName || !email || !phone || !fromLocation || !toLocation || !weight || !dateText) {
-      Alert.alert('Incomplete Form', 'Please fill in all fields including the date.');
+    if (!fullName || !email || !phone || !fromLocation || !toLocation || !weight || !dateText || !description) {
+      Alert.alert('Incomplete Form', 'Please fill in all fields including item description and travel date.');
       return;
     }
 
-    const calculatedPrice = calculatePrice(weight, fromLocation, toLocation);
+    const calculatedPrice = calculatePrice(weight, fromLocation, toLocation, itemCategory);
     
     const newEntry = {
       name: fullName,
@@ -213,6 +229,8 @@ export default function App() {
       capacity: `${weight} kg`,
       price: `$${calculatedPrice}`,
       date: dateText,
+      description: description,
+      item_category: itemCategory,
       type: role === 'sender' ? 'sender' : 'traveler',
       user_id: user ? user.id : null,
     };
@@ -229,11 +247,10 @@ export default function App() {
       setFromLocation('');
       setToLocation('');
       setWeight('');
+      setDescription('');
       setDateText('');
-      setShowDatePicker(false);
       fetchListings();
 
-      // Trigger 5-Second Searching Buffering Animation
       setIsSearching(true);
       setTimeout(() => {
         setIsSearching(false);
@@ -439,9 +456,10 @@ export default function App() {
   const userListings = listings.filter((item) => item.user_id === user?.id);
   const activeUserListing = userListings.length > 0 ? userListings[0] : null;
 
-  // Flexible Date Partner Lookup for active user listing
   const targetType = activeUserListing?.type === 'sender' ? 'traveler' : 'sender';
   const partnerMatch = listings.find((item) => item.type === targetType && item.user_id !== user?.id) || INITIAL_FALLBACK_DATA[0];
+
+  const estimatedPrice = calculatePrice(weight, fromLocation, toLocation, itemCategory);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -544,7 +562,7 @@ export default function App() {
 
             <TouchableOpacity
               style={[styles.input, styles.halfInput, styles.datePickerButton]}
-              onPress={() => setShowDatePicker(true)}
+              onPress={() => setShowDatePickerModal(true)}
             >
               <Text style={{ color: dateText ? '#FFFFFF' : '#8E8E93' }}>
                 {dateText || (role === 'sender' ? 'Needed By (Date)' : 'Flight Date')}
@@ -552,23 +570,22 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          {showDatePicker && (
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleDateChange}
-              minimumDate={new Date()}
-            />
-          )}
+          {/* Description of Goods Trigger Button */}
+          <TouchableOpacity
+            style={[styles.input, styles.goodsSelectorButton]}
+            onPress={() => setShowGoodsModal(true)}
+          >
+            <Text style={{ color: description ? '#FFFFFF' : '#8E8E93' }} numberOfLines={1}>
+              {description ? `📦 ${description} (${itemCategory})` : '📦 Describe Goods & Select Customs Class'}
+            </Text>
+          </TouchableOpacity>
 
-          {Platform.OS === 'ios' && showDatePicker && (
-            <TouchableOpacity
-              style={styles.doneButton}
-              onPress={() => setShowDatePicker(false)}
-            >
-              <Text style={styles.doneButtonText}>Confirm Date</Text>
-            </TouchableOpacity>
+          {weight !== '' && (
+            <View style={styles.priceEstimateBox}>
+              <Text style={styles.priceEstimateText}>
+                Estimated Price: <Text style={{ color: '#10B981', fontWeight: 'bold' }}>${estimatedPrice}</Text>
+              </Text>
+            </View>
           )}
 
           <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
@@ -615,6 +632,12 @@ export default function App() {
                   <Text style={styles.feedPrice}>{item.price}</Text>
                 </View>
                 <Text style={styles.feedRoute}>{item.route}</Text>
+                {item.description ? (
+                  <Text style={styles.feedDesc}>📦 Items: {item.description}</Text>
+                ) : null}
+                {item.item_category ? (
+                  <Text style={styles.feedCatTag}>🏷️ {item.item_category}</Text>
+                ) : null}
                 <Text style={styles.feedDate}>📅 {item.date}</Text>
 
                 <TouchableOpacity
@@ -627,6 +650,91 @@ export default function App() {
             );
           })}
       </ScrollView>
+
+      {/* Pop-up Goods Description & Customs Modal (Keyboard Avoiding View) */}
+      <Modal visible={showGoodsModal} transparent animationType="fade">
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <View style={styles.modalContentCard}>
+              <Text style={styles.modalTitle}>Description of Goods</Text>
+              
+              <TextInput
+                style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
+                placeholder="List items (e.g. Clothes, Shoes, Laptop, Medicines)"
+                placeholderTextColor="#8E8E93"
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                returnKeyType="done"
+                onSubmitEditing={Keyboard.dismiss}
+              />
+
+              <Text style={styles.categoryTitle}>Customs Classification:</Text>
+              <View style={styles.categoryContainer}>
+                {[
+                  { label: 'Customs-Free Items', desc: 'Standard Rate' },
+                  { label: 'Customs Declaration Required', desc: '+25% Premium' },
+                  { label: 'Restricted Items', desc: '+50% Premium' },
+                ].map((cat) => (
+                  <TouchableOpacity
+                    key={cat.label}
+                    style={[
+                      styles.categoryOption,
+                      itemCategory === cat.label && styles.categoryOptionSelected,
+                    ]}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setItemCategory(cat.label);
+                    }}
+                  >
+                    <Text style={styles.categoryOptionText}>
+                      {itemCategory === cat.label ? '🔘' : '⚪'} {cat.label}
+                    </Text>
+                    <Text style={styles.categoryDescText}>{cat.desc}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity 
+                style={styles.confirmModalButton} 
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setShowGoodsModal(false);
+                }}
+              >
+                <Text style={styles.confirmModalButtonText}>Confirm Item Details</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Pop-up Date Picker Modal */}
+      <Modal visible={showDatePickerModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.datePickerModalCard}>
+            <Text style={styles.modalTitle}>Select Flight / Needed Date</Text>
+            
+            <View style={styles.datePickerWrapper}>
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleDateChange}
+                minimumDate={new Date()}
+                textColor="#FFFFFF"
+              />
+            </View>
+
+            <TouchableOpacity style={styles.confirmDateButton} onPress={confirmDateSelection}>
+              <Text style={styles.confirmDateButtonText}>Confirm Date</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Floating Bottom Status Sheet */}
       <View style={styles.bottomStatusSheet}>
@@ -879,8 +987,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   halfInput: { width: '48%' },
   datePickerButton: { justifyContent: 'center' },
-  doneButton: { backgroundColor: '#2563EB', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
-  doneButtonText: { color: '#FFFFFF', fontWeight: 'bold' },
+  goodsSelectorButton: { justifyContent: 'center' },
   submitButton: { backgroundColor: '#F59E0B', padding: 14, borderRadius: 10, alignItems: 'center', marginTop: 8 },
   submitButtonText: { color: '#0F172A', fontWeight: 'bold', fontSize: 15 },
   sectionTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
@@ -889,10 +996,77 @@ const styles = StyleSheet.create({
   feedName: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   feedWeight: { color: '#F59E0B' },
   feedPrice: { color: '#10B981', fontSize: 18, fontWeight: 'bold' },
-  feedRoute: { color: '#94A3B8', fontSize: 14, marginVertical: 4 },
+  feedRoute: { color: '#94A3B8', fontSize: 14, marginVertical: 2 },
+  feedDesc: { color: '#CBD5E1', fontSize: 12, marginTop: 4 },
+  feedCatTag: { color: '#F59E0B', fontSize: 11, fontWeight: '600', marginVertical: 2 },
   feedDate: { color: '#64748B', fontSize: 12, marginBottom: 12 },
   contactButton: { backgroundColor: '#2563EB', padding: 10, borderRadius: 8, alignItems: 'center' },
   contactButtonText: { color: '#FFFFFF', fontWeight: '600' },
+
+  // Customs Category & Goods Modal Styles
+  modalContentCard: {
+    backgroundColor: '#1E293B',
+    padding: 20,
+    borderRadius: 16,
+    width: '85%',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  categoryTitle: { color: '#94A3B8', fontSize: 12, fontWeight: 'bold', marginBottom: 6 },
+  categoryContainer: { marginBottom: 12 },
+  categoryOption: {
+    flexDirection: 'row',
+    justify: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  categoryOptionSelected: { borderColor: '#F59E0B', backgroundColor: '#1E293B' },
+  categoryOptionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  categoryDescText: { color: '#10B981', fontSize: 11, fontWeight: 'bold' },
+  priceEstimateBox: { backgroundColor: '#0F172A', padding: 10, borderRadius: 8, marginBottom: 12, alignItems: 'center' },
+  priceEstimateText: { color: '#FFFFFF', fontSize: 13 },
+  confirmModalButton: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  confirmModalButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+
+  // Date Picker Modal Styles
+  datePickerModalCard: {
+    backgroundColor: '#1E293B',
+    padding: 20,
+    borderRadius: 16,
+    width: '85%',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  datePickerWrapper: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    marginVertical: 12,
+    width: '100%',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  confirmDateButton: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  confirmDateButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 15 },
 
   // Bottom Status Sheet Styles
   bottomStatusSheet: {
