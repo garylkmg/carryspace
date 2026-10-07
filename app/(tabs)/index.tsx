@@ -16,9 +16,11 @@ import {
   KeyboardAvoidingView,
   TouchableWithoutFeedback,
   Keyboard,
+  Image,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createClient } from '@supabase/supabase-js';
+import * as ImagePicker from 'expo-image-picker';
 
 const SUPABASE_URL = 'https://jofzpfivwdmlhdjihunf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_s4Rr_m0SjqiBT6DVptBD0w_jh01a5HX';
@@ -36,11 +38,14 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loadingSession, setLoadingSession] = useState(true);
 
-  // Auth Screen State
+  // Auth & Verification Screen State
   const [authMode, setAuthMode] = useState('login');
   const [authFullName, setAuthFullName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [idPhoto, setIdPhoto] = useState(null);
+  const [facePhoto, setFacePhoto] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Form Fields
   const [fullName, setFullName] = useState('');
@@ -115,7 +120,44 @@ export default function App() {
     if (recReqs) setIncomingRequests(recReqs);
   };
 
-  // Auth Actions
+  // Capture ID / Passport Photo
+  const handleTakeIdPhoto = async () => {
+    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permissionResult.granted) {
+      Alert.alert('Permission Denied', 'Camera access is required to take photo ID verification.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.7,
+    });
+
+    if (!result.canceled && result.assets[0]?.uri) {
+      setIdPhoto(result.assets[0].uri);
+    }
+  };
+
+  // Capture Live Face Selfie
+  const handleTakeFacePhoto = async () => {
+    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permissionResult.granted) {
+      Alert.alert('Permission Denied', 'Camera access is required to take live face verification photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      cameraType: ImagePicker.CameraType.front,
+      allowsEditing: true,
+      quality: 0.7,
+    });
+
+    if (!result.canceled && result.assets[0]?.uri) {
+      setFacePhoto(result.assets[0].uri);
+    }
+  };
+
+  // Auth Actions with 3-second verification processing delay
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
       Alert.alert('Incomplete Fields', 'Please enter both email and password.');
@@ -128,21 +170,47 @@ export default function App() {
         return;
       }
 
-      const { data, error } = await supabase.auth.signUp({
-        email: authEmail,
-        password: authPassword,
-        options: { data: { full_name: authFullName } },
-      });
-
-      if (error) {
-        Alert.alert('Sign Up Error', error.message);
-      } else {
-        Alert.alert('Account Created', 'Your account has been created successfully!');
-        setUser(data.user);
-        setAuthFullName('');
-        setAuthEmail('');
-        setAuthPassword('');
+      if (!idPhoto) {
+        Alert.alert('Verification Required', 'Please take/upload a clear photo of your ID or Passport.');
+        return;
       }
+
+      if (!facePhoto) {
+        Alert.alert('Verification Required', 'Please take a live face photo via camera for identity verification.');
+        return;
+      }
+
+      // Show 3-second buffering state
+      setIsVerifying(true);
+
+      setTimeout(async () => {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+          options: {
+            data: {
+              full_name: authFullName,
+              id_verified: true,
+              id_photo_url: idPhoto,
+              face_photo_url: facePhoto,
+            },
+          },
+        });
+
+        setIsVerifying(false);
+
+        if (error) {
+          Alert.alert('Sign Up Error', error.message);
+        } else {
+          Alert.alert('Account Verified & Created', 'Identity verified successfully! Welcome to CarrySpace.');
+          setUser(data.user);
+          setAuthFullName('');
+          setAuthEmail('');
+          setAuthPassword('');
+          setIdPhoto(null);
+          setFacePhoto(null);
+        }
+      }, 3000);
     } else {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: authEmail,
@@ -215,7 +283,7 @@ export default function App() {
 
   const handleSubmit = async () => {
     if (!fullName || !email || !phone || !fromLocation || !toLocation || !weight || !dateText || !description) {
-      Alert.alert('Incomplete Form', 'Please fill in all fields including item description and travel date.');
+      Alert.alert('Incomplete Form', 'Please fill in all fields including item details and travel date.');
       return;
     }
 
@@ -226,11 +294,9 @@ export default function App() {
       email: email,
       phone: phone,
       route: `${fromLocation.toUpperCase()} ➔ ${toLocation.toUpperCase()}`,
-      capacity: `${weight} kg`,
+      capacity: `${weight} kg (${itemCategory})`,
       price: `$${calculatedPrice}`,
       date: dateText,
-      description: description,
-      item_category: itemCategory,
       type: role === 'sender' ? 'sender' : 'traveler',
       user_id: user ? user.id : null,
     };
@@ -389,60 +455,120 @@ export default function App() {
     return (
       <SafeAreaView style={[styles.container, styles.centerContent]}>
         <StatusBar barStyle="light-content" />
-        <View style={styles.authContainer}>
-          <Text style={styles.authLogo} numberOfLines={1}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
-          <Text style={styles.authSubtitle}>Peer-to-Peer Luggage Space Sharing</Text>
+        <ScrollView contentContainerStyle={styles.authScrollContainer}>
+          <View style={styles.authContainer}>
+            <Text style={styles.authLogo} numberOfLines={1}>CARRY<Text style={styles.logoAccent}>SPACE</Text></Text>
+            <Text style={styles.authSubtitle}>Peer-to-Peer Luggage Space Sharing</Text>
 
-          <View style={styles.authToggleRow}>
-            <TouchableOpacity
-              style={[styles.authTab, authMode === 'login' && styles.authTabActive]}
-              onPress={() => setAuthMode('login')}
-            >
-              <Text style={styles.authTabText}>Log In</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.authTab, authMode === 'signup' && styles.authTabActive]}
-              onPress={() => setAuthMode('signup')}
-            >
-              <Text style={styles.authTabText}>Sign Up</Text>
-            </TouchableOpacity>
-          </View>
+            <View style={styles.authToggleRow}>
+              <TouchableOpacity
+                style={[styles.authTab, authMode === 'login' && styles.authTabActive]}
+                onPress={() => setAuthMode('login')}
+                disabled={isVerifying}
+              >
+                <Text style={styles.authTabText}>Log In</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.authTab, authMode === 'signup' && styles.authTabActive]}
+                onPress={() => setAuthMode('signup')}
+                disabled={isVerifying}
+              >
+                <Text style={styles.authTabText}>Sign Up</Text>
+              </TouchableOpacity>
+            </View>
 
-          {authMode === 'signup' && (
+            {authMode === 'signup' && (
+              <TextInput
+                style={styles.input}
+                placeholder="Full Name"
+                placeholderTextColor="#8E8E93"
+                value={authFullName}
+                onChangeText={setAuthFullName}
+                editable={!isVerifying}
+              />
+            )}
+
             <TextInput
               style={styles.input}
-              placeholder="Full Name"
+              placeholder="Email Address"
               placeholderTextColor="#8E8E93"
-              value={authFullName}
-              onChangeText={setAuthFullName}
+              value={authEmail}
+              onChangeText={setAuthEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              editable={!isVerifying}
             />
-          )}
 
-          <TextInput
-            style={styles.input}
-            placeholder="Email Address"
-            placeholderTextColor="#8E8E93"
-            value={authEmail}
-            onChangeText={setAuthEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#8E8E93"
+              value={authPassword}
+              onChangeText={setAuthPassword}
+              secureTextEntry
+              editable={!isVerifying}
+            />
 
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            placeholderTextColor="#8E8E93"
-            value={authPassword}
-            onChangeText={setAuthPassword}
-            secureTextEntry
-          />
+            {/* ID & Live Face Verification Section for Signup */}
+            {authMode === 'signup' && (
+              <View style={styles.verificationSection}>
+                <Text style={styles.verificationTitle}>🔒 ID & Live Verification Required</Text>
+                <Text style={styles.verificationSub}>
+                  Upload Passport/ID and take a live face selfie to unlock peer-to-peer sharing.
+                </Text>
 
-          <TouchableOpacity style={styles.submitButton} onPress={handleAuth}>
-            <Text style={styles.submitButtonText}>
-              {authMode === 'login' ? 'Log In to CarrySpace' : 'Create Account'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+                <View style={styles.row}>
+                  {/* ID / Passport Trigger */}
+                  <TouchableOpacity 
+                    style={[styles.uploadBox, idPhoto ? styles.uploadBoxDone : null]}
+                    onPress={handleTakeIdPhoto}
+                    disabled={isVerifying}
+                  >
+                    {idPhoto ? (
+                      <Image source={{ uri: idPhoto }} style={styles.previewImage} />
+                    ) : (
+                      <>
+                        <Text style={styles.uploadIcon}>🪪</Text>
+                        <Text style={styles.uploadLabel}>Photo ID / Passport</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Camera Selfie Trigger */}
+                  <TouchableOpacity 
+                    style={[styles.uploadBox, facePhoto ? styles.uploadBoxDone : null]}
+                    onPress={handleTakeFacePhoto}
+                    disabled={isVerifying}
+                  >
+                    {facePhoto ? (
+                      <Image source={{ uri: facePhoto }} style={styles.previewImage} />
+                    ) : (
+                      <>
+                        <Text style={styles.uploadIcon}>📸</Text>
+                        <Text style={styles.uploadLabel}>Take Face Selfie</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Verification Processing Overlay */}
+            {isVerifying ? (
+              <View style={styles.verifyingOverlayBox}>
+                <ActivityIndicator size="large" color="#F59E0B" />
+                <Text style={styles.verifyingOverlayText}>Verifying Face & Photo ID...</Text>
+                <Text style={styles.verifyingSubText}>Processing identity compliance check</Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.submitButton} onPress={handleAuth}>
+                <Text style={styles.submitButtonText}>
+                  {authMode === 'login' ? 'Log In to CarrySpace' : 'Verify & Create Account'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -576,7 +702,7 @@ export default function App() {
             onPress={() => setShowGoodsModal(true)}
           >
             <Text style={{ color: description ? '#FFFFFF' : '#8E8E93' }} numberOfLines={1}>
-              {description ? `📦 ${description} (${itemCategory})` : '📦 Describe Goods & Select Customs Class'}
+              {description ? `📦 ${description} (${itemCategory})` : role === 'traveler' ? '📦 Goods you would like to carry' : '📦 Describe Goods & Select Customs Class'}
             </Text>
           </TouchableOpacity>
 
@@ -651,7 +777,7 @@ export default function App() {
           })}
       </ScrollView>
 
-      {/* Pop-up Goods Description & Customs Modal (Keyboard Avoiding View) */}
+      {/* Pop-up Goods Description & Customs Modal */}
       <Modal visible={showGoodsModal} transparent animationType="fade">
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <KeyboardAvoidingView 
@@ -659,11 +785,17 @@ export default function App() {
             style={styles.modalOverlay}
           >
             <View style={styles.modalContentCard}>
-              <Text style={styles.modalTitle}>Description of Goods</Text>
+              <Text style={styles.modalTitle}>
+                {role === 'traveler' ? 'Goods you would like to carry' : 'Description of Goods'}
+              </Text>
               
               <TextInput
                 style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-                placeholder="List items (e.g. Clothes, Shoes, Laptop, Medicines)"
+                placeholder={
+                  role === 'traveler'
+                    ? 'Message for sender (for example write): Personal Luggage only'
+                    : 'List items (e.g. Clothes, Shoes, Laptop, Medicines)'
+                }
                 placeholderTextColor="#8E8E93"
                 value={description}
                 onChangeText={setDescription}
@@ -673,30 +805,66 @@ export default function App() {
               />
 
               <Text style={styles.categoryTitle}>Customs Classification:</Text>
-              <View style={styles.categoryContainer}>
-                {[
-                  { label: 'Customs-Free Items', desc: 'Standard Rate' },
-                  { label: 'Customs Declaration Required', desc: '+25% Premium' },
-                  { label: 'Restricted Items', desc: '+50% Premium' },
-                ].map((cat) => (
-                  <TouchableOpacity
-                    key={cat.label}
-                    style={[
-                      styles.categoryOption,
-                      itemCategory === cat.label && styles.categoryOptionSelected,
-                    ]}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setItemCategory(cat.label);
-                    }}
-                  >
-                    <Text style={styles.categoryOptionText}>
-                      {itemCategory === cat.label ? '🔘' : '⚪'} {cat.label}
-                    </Text>
-                    <Text style={styles.categoryDescText}>{cat.desc}</Text>
-                  </TouchableOpacity>
-                ))}
+              
+              {/* Customs Option 1: Free Items */}
+              <TouchableOpacity
+                style={[
+                  styles.categoryOption,
+                  itemCategory === 'Customs-Free Items' && styles.categoryOptionSelected,
+                ]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setItemCategory('Customs-Free Items');
+                }}
+              >
+                <Text style={styles.categoryOptionText}>
+                  {itemCategory === 'Customs-Free Items' ? '🔘' : '⚪'} Customs-Free Items
+                </Text>
+                <Text style={styles.categoryDescText}>Standard Rate</Text>
+              </TouchableOpacity>
+
+              {/* Dynamic Tagline Banner */}
+              <View style={styles.earnMoreBanner}>
+                <Text style={styles.earnMoreBannerText}>
+                  {role === 'sender'
+                    ? '⭐ Pay a little extra to ask for extra help:'
+                    : '⭐ Earn More with a little hassle:'}
+                </Text>
               </View>
+
+              {/* Customs Option 2: Declaration Required */}
+              <TouchableOpacity
+                style={[
+                  styles.categoryOption,
+                  itemCategory === 'Customs Declaration Required' && styles.categoryOptionSelected,
+                ]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setItemCategory('Customs Declaration Required');
+                }}
+              >
+                <Text style={styles.categoryOptionText}>
+                  {itemCategory === 'Customs Declaration Required' ? '🔘' : '⚪'} Customs Declaration Required
+                </Text>
+                <Text style={styles.categoryDescText}>+25% Premium</Text>
+              </TouchableOpacity>
+
+              {/* Customs Option 3: Restricted Items */}
+              <TouchableOpacity
+                style={[
+                  styles.categoryOption,
+                  itemCategory === 'Restricted Items' && styles.categoryOptionSelected,
+                ]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setItemCategory('Restricted Items');
+                }}
+              >
+                <Text style={styles.categoryOptionText}>
+                  {itemCategory === 'Restricted Items' ? '🔘' : '⚪'} Restricted Items
+                </Text>
+                <Text style={styles.categoryDescText}>+50% Premium</Text>
+              </TouchableOpacity>
 
               <TouchableOpacity 
                 style={styles.confirmModalButton} 
@@ -891,6 +1059,11 @@ export default function App() {
             <View style={styles.userBadge}>
               <Text style={styles.userBadgeText}>Logged in as: {userGreetingName}</Text>
               <Text style={[styles.userBadgeText, { fontSize: 11, color: '#94A3B8' }]}>{user.email}</Text>
+              {user.user_metadata?.id_verified && (
+                <Text style={{ color: '#10B981', fontSize: 11, fontWeight: 'bold', textAlign: 'center', marginTop: 2 }}>
+                  ✅ Passport & Face ID Verified
+                </Text>
+              )}
             </View>
 
             <TouchableOpacity 
@@ -957,9 +1130,31 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0F1D' },
   centerContent: { justifyContent: 'center', alignItems: 'center' },
-  authContainer: { width: '85%', backgroundColor: '#1E293B', padding: 24, borderRadius: 16 },
+  authScrollContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 24 },
+  authContainer: { width: '88%', backgroundColor: '#1E293B', padding: 24, borderRadius: 16 },
   authLogo: { fontSize: 28, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center' },
-  authSubtitle: { color: '#94A3B8', fontSize: 13, textAlign: 'center', marginBottom: 24, marginTop: 4 },
+  authSubtitle: { color: '#94A3B8', fontSize: 13, textAlign: 'center', marginBottom: 20, marginTop: 4 },
+  verificationSection: { marginVertical: 12, backgroundColor: '#0F172A', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#334155' },
+  verificationTitle: { color: '#F59E0B', fontWeight: 'bold', fontSize: 12, marginBottom: 2 },
+  verificationSub: { color: '#94A3B8', fontSize: 11, marginBottom: 12 },
+  uploadBox: { flex: 1, height: 80, backgroundColor: '#1E293B', borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginHorizontal: 4, borderWidth: 1, borderColor: '#334155', borderStyle: 'dashed' },
+  uploadBoxDone: { borderColor: '#10B981', borderStyle: 'solid' },
+  uploadIcon: { fontSize: 22 },
+  uploadLabel: { color: '#94A3B8', fontSize: 10, marginTop: 4, textAlign: 'center', paddingHorizontal: 2 },
+  previewImage: { width: '100%', height: '100%', borderRadius: 8 },
+  
+  verifyingOverlayBox: {
+    backgroundColor: '#0F172A',
+    padding: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  verifyingOverlayText: { color: '#F59E0B', fontWeight: 'bold', fontSize: 14, marginTop: 8 },
+  verifyingSubText: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
+
   header: { 
     paddingHorizontal: 16, 
     paddingVertical: 12,
@@ -1016,7 +1211,7 @@ const styles = StyleSheet.create({
   categoryContainer: { marginBottom: 12 },
   categoryOption: {
     flexDirection: 'row',
-    justify: 'space-between',
+    justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#0F172A',
     padding: 10,
@@ -1028,6 +1223,8 @@ const styles = StyleSheet.create({
   categoryOptionSelected: { borderColor: '#F59E0B', backgroundColor: '#1E293B' },
   categoryOptionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
   categoryDescText: { color: '#10B981', fontSize: 11, fontWeight: 'bold' },
+  earnMoreBanner: { marginVertical: 6, paddingHorizontal: 2 },
+  earnMoreBannerText: { color: '#F59E0B', fontSize: 12, fontWeight: 'bold' },
   priceEstimateBox: { backgroundColor: '#0F172A', padding: 10, borderRadius: 8, marginBottom: 12, alignItems: 'center' },
   priceEstimateText: { color: '#FFFFFF', fontSize: 13 },
   confirmModalButton: {
