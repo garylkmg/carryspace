@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -17,10 +17,13 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   Image,
+  FlatList,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createClient } from '@supabase/supabase-js';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
+import MapView, { Marker } from 'react-native-maps';
 
 const SUPABASE_URL = 'https://jofzpfivwdmlhdjihunf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_s4Rr_m0SjqiBT6DVptBD0w_jh01a5HX';
@@ -63,10 +66,8 @@ export default function App() {
   const [showGoodsModal, setShowGoodsModal] = useState(false);
   const [dateText, setDateText] = useState('');
 
-  // Feed, Requests & Modals State
+  // Feed & Listings State
   const [listings, setListings] = useState(INITIAL_FALLBACK_DATA);
-  const [userRequests, setUserRequests] = useState([]);
-  const [incomingRequests, setIncomingRequests] = useState([]);
   const [selectedListing, setSelectedListing] = useState(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
@@ -74,16 +75,91 @@ export default function App() {
   // Searching Animation State
   const [isSearching, setIsSearching] = useState(false);
 
+  // In-App Messaging State
+  const [chatPartner, setChatPartner] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessageText, setNewMessageText] = useState('');
+  const [showChatModal, setShowChatModal] = useState(false);
+  const flatListRef = useRef(null);
+
+  // Live Location Tracking State
+  const [showLiveTrackingModal, setShowLiveTrackingModal] = useState(false);
+  const [currentCoords, setCurrentCoords] = useState(null);
+
   useEffect(() => {
     checkActiveSession();
     fetchListings();
   }, []);
 
+  const userListings = listings.filter((item) => item.user_id === user?.id);
+  const activeUserListing = userListings.length > 0 ? userListings[0] : null;
+
+  // Automated GPS Publisher when status is "in_transit"
   useEffect(() => {
-    if (user) {
-      fetchUserRequests();
-    }
-  }, [user]);
+    let locationSubscription;
+
+    const startAutomatedTracking = async () => {
+      if (role === 'traveler' && activeUserListing?.status === 'in_transit') {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 5,
+          },
+          async (loc) => {
+            const { latitude, longitude } = loc.coords;
+            setCurrentCoords({ latitude, longitude });
+
+            await supabase
+              .from('listings')
+              .update({
+                live_lat: latitude,
+                live_lng: longitude,
+                is_tracking_active: true,
+              })
+              .eq('id', activeUserListing.id);
+          }
+        );
+      }
+    };
+
+    startAutomatedTracking();
+
+    return () => {
+      if (locationSubscription) locationSubscription.remove();
+    };
+  }, [activeUserListing?.status, role]);
+
+  // Realtime Chat Subscription
+  useEffect(() => {
+    if (!user || !chatPartner) return;
+
+    fetchMessages();
+
+    const channel = supabase
+      .channel('public:messages')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const newMsg = payload.new;
+          if (
+            (newMsg.sender_id === user.id && newMsg.receiver_id === chatPartner.user_id) ||
+            (newMsg.sender_id === chatPartner.user_id && newMsg.receiver_id === user.id)
+          ) {
+            setMessages((prev) => [...prev, newMsg]);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [chatPartner, user]);
 
   const checkActiveSession = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -98,29 +174,70 @@ export default function App() {
   };
 
   const fetchListings = async () => {
-    const { data, error } = await supabase.from('listings').select('*').order('id', { ascending: false });
+    const { data } = await supabase.from('listings').select('*').order('id', { ascending: false });
     if (data && data.length > 0) {
       setListings([...data, ...INITIAL_FALLBACK_DATA]);
     }
   };
 
-  const fetchUserRequests = async () => {
-    if (!user) return;
-    
-    const { data: sentReqs } = await supabase
-      .from('requests')
-      .select('*')
-      .eq('requester_id', user.id);
-    if (sentReqs) setUserRequests(sentReqs);
+  // Chat Actions
+  const fetchMessages = async () => {
+    if (!user || !chatPartner) return;
 
-    const { data: recReqs } = await supabase
-      .from('requests')
-      .select('*, listings(*)')
-      .eq('owner_id', user.id);
-    if (recReqs) setIncomingRequests(recReqs);
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`and(sender_id.eq.${user.id},receiver_id.eq.${chatPartner.user_id}),and(sender_id.eq.${chatPartner.user_id},receiver_id.eq.${user.id})`)
+      .order('created_at', { ascending: true });
+
+    if (data) setMessages(data);
   };
 
-  // Capture ID / Passport Photo
+  const handleSendMessage = async () => {
+    if (!user || !chatPartner || !newMessageText.trim()) return;
+
+    const msgData = {
+      sender_id: user.id,
+      receiver_id: chatPartner.user_id,
+      listing_id: chatPartner.id && !isNaN(Number(chatPartner.id)) ? Number(chatPartner.id) : null,
+      text: newMessageText.trim(),
+    };
+
+    const { error } = await supabase.from('messages').insert([msgData]);
+
+    if (error) {
+      Alert.alert('Message Error', error.message);
+    } else {
+      setNewMessageText('');
+    }
+  };
+
+  // Direct Instant Messaging & Automatic Email Notification Action
+  const handleAcceptAndInstantContact = async (item) => {
+    if (!user) return;
+
+    if (item.user_id === user.id) {
+      Alert.alert('Notice', 'You cannot request your own listing.');
+      return;
+    }
+
+    // 1. Queue automatic email notification to the listing owner
+    if (item.email) {
+      await supabase.from('email_queue').insert([
+        {
+          recipient_email: item.email,
+          subject: '🎉 CarrySpace: Someone accepted your listing!',
+          body: `Hello ${item.name},\n\nA user has accepted your listing (${item.route}) on CarrySpace and opened a direct chat with you.\n\nOpen CarrySpace to view the message!`,
+        },
+      ]);
+    }
+
+    // 2. Open chat screen immediately
+    setChatPartner(item);
+    setShowChatModal(true);
+  };
+
+  // Camera Actions
   const handleTakeIdPhoto = async () => {
     const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permissionResult.granted) {
@@ -138,7 +255,6 @@ export default function App() {
     }
   };
 
-  // Capture Live Face Selfie
   const handleTakeFacePhoto = async () => {
     const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permissionResult.granted) {
@@ -157,7 +273,7 @@ export default function App() {
     }
   };
 
-  // Auth Actions with 3-second verification processing delay
+  // Auth Actions
   const handleAuth = async () => {
     if (!authEmail || !authPassword) {
       Alert.alert('Incomplete Fields', 'Please enter both email and password.');
@@ -180,7 +296,6 @@ export default function App() {
         return;
       }
 
-      // Show 3-second buffering state
       setIsVerifying(true);
 
       setTimeout(async () => {
@@ -252,7 +367,6 @@ export default function App() {
     setShowDatePickerModal(false);
   };
 
-  // Distance & Customs Risk-Adjusted Pricing Calculation
   const calculatePrice = (kg, from, to, category) => {
     const weightNum = parseFloat(kg) || 0;
     if (!weightNum) return 0;
@@ -299,6 +413,7 @@ export default function App() {
       date: dateText,
       type: role === 'sender' ? 'sender' : 'traveler',
       user_id: user ? user.id : null,
+      status: 'pending',
     };
 
     const { error } = await supabase.from('listings').insert([newEntry]);
@@ -324,82 +439,31 @@ export default function App() {
     }
   };
 
-  const handleAcceptAndContact = async (item, isAcceptedByOther) => {
-    if (!user) return;
-
-    if (item.user_id === user.id) {
-      Alert.alert('Notice', 'You cannot request your own listing.');
-      return;
-    }
-
-    if (isAcceptedByOther) {
-      Alert.alert('Listing Booked', 'This listing is already accepted and pending fulfillment with another user.');
-      return;
-    }
-
-    const existingRequest = userRequests.find((r) => r.listing_id === item.id);
-
-    if (existingRequest) {
-      if (existingRequest.status === 'pending') {
-        Alert.alert('Status: Pending', 'You have already sent a request. Waiting for counter-acceptance by the listing owner.');
-      } else if (existingRequest.status === 'accepted') {
-        setSelectedListing(item);
-      } else {
-        Alert.alert('Request Declined', 'The owner has declined this request.');
-      }
-      return;
-    }
-
-    const { error } = await supabase.from('requests').insert([
-      {
-        listing_id: item.id,
-        requester_id: user.id,
-        owner_id: item.user_id,
-        status: 'pending',
-      },
-    ]);
-
-    if (error) {
-      Alert.alert('Error', error.message);
-    } else {
-      Alert.alert('Request Sent!', 'Acceptance request sent. Direct contact info will unlock once counter-accepted by the owner.');
-      fetchUserRequests();
-    }
-  };
-
-  const handleUpdateRequestStatus = async (requestId, newStatus) => {
+  const handleUpdateListingStatus = async (listingId, newStatus) => {
     const { error } = await supabase
-      .from('requests')
-      .update({ status: newStatus })
-      .eq('id', requestId);
+      .from('listings')
+      .update({ 
+        status: newStatus,
+        is_tracking_active: newStatus === 'in_transit'
+      })
+      .eq('id', listingId);
 
     if (error) {
       Alert.alert('Error', error.message);
     } else {
-      Alert.alert('Updated', `Request ${newStatus} successfully.`);
-      fetchUserRequests();
+      fetchListings();
+      if (newStatus === 'in_transit') {
+        Alert.alert('Package Handed Over', 'Package is now In Transit! Live GPS tracking activated.');
+      } else if (newStatus === 'completed') {
+        Alert.alert('Delivery Complete', 'Package delivered successfully. Live GPS tracking ended.');
+      }
     }
-  };
-
-  const handleUpdateListingStatus = (listingId, newStatus) => {
-    setListings((prevgings) =>
-      prevgings.map((item) =>
-        item.id === listingId ? { ...item, status: newStatus } : item
-      )
-    );
   };
 
   const handleCall = (phoneNumber) => {
     if (!phoneNumber) return;
     Linking.openURL(`tel:${phoneNumber}`).catch(() => {
       Alert.alert('Error', 'Unable to open phone dialer on this device.');
-    });
-  };
-
-  const handleEmail = (emailAddress) => {
-    if (!emailAddress) return;
-    Linking.openURL(`mailto:${emailAddress}?subject=CarrySpace Listing Inquiry`).catch(() => {
-      Alert.alert('Error', 'Unable to open email client on this device.');
     });
   };
 
@@ -509,7 +573,6 @@ export default function App() {
               editable={!isVerifying}
             />
 
-            {/* ID & Live Face Verification Section for Signup */}
             {authMode === 'signup' && (
               <View style={styles.verificationSection}>
                 <Text style={styles.verificationTitle}>🔒 ID & Live Verification Required</Text>
@@ -518,7 +581,6 @@ export default function App() {
                 </Text>
 
                 <View style={styles.row}>
-                  {/* ID / Passport Trigger */}
                   <TouchableOpacity 
                     style={[styles.uploadBox, idPhoto ? styles.uploadBoxDone : null]}
                     onPress={handleTakeIdPhoto}
@@ -534,7 +596,6 @@ export default function App() {
                     )}
                   </TouchableOpacity>
 
-                  {/* Camera Selfie Trigger */}
                   <TouchableOpacity 
                     style={[styles.uploadBox, facePhoto ? styles.uploadBoxDone : null]}
                     onPress={handleTakeFacePhoto}
@@ -553,7 +614,6 @@ export default function App() {
               </View>
             )}
 
-            {/* Verification Processing Overlay */}
             {isVerifying ? (
               <View style={styles.verifyingOverlayBox}>
                 <ActivityIndicator size="large" color="#F59E0B" />
@@ -579,10 +639,7 @@ export default function App() {
     ? user.email.split('@')[0].split('.')[0]
     : 'User';
 
-  const userListings = listings.filter((item) => item.user_id === user?.id);
-  const activeUserListing = userListings.length > 0 ? userListings[0] : null;
-
-  const targetType = activeUserListing?.type === 'sender' ? 'traveler' : 'sender';
+  const targetType = role === 'sender' ? 'traveler' : 'sender';
   const partnerMatch = listings.find((item) => item.type === targetType && item.user_id !== user?.id) || INITIAL_FALLBACK_DATA[0];
 
   const estimatedPrice = calculatePrice(weight, fromLocation, toLocation, itemCategory);
@@ -696,7 +753,6 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          {/* Description of Goods Trigger Button */}
           <TouchableOpacity
             style={[styles.input, styles.goodsSelectorButton]}
             onPress={() => setShowGoodsModal(true)}
@@ -728,53 +784,29 @@ export default function App() {
 
         {listings
           .filter((item) => item.type === (role === 'sender' ? 'traveler' : 'sender') && item.status !== 'completed')
-          .map((item) => {
-            const req = userRequests.find((r) => r.listing_id === item.id);
-            const isAcceptedGlobally = req?.status === 'accepted';
-
-            let btnLabel = 'Accept & Contact';
-            let btnStyle = styles.contactButton;
-
-            if (req) {
-              if (req.status === 'pending') {
-                btnLabel = '⏳ Pending';
-                btnStyle = [styles.contactButton, { backgroundColor: '#D97706' }];
-              } else if (req.status === 'accepted') {
-                btnLabel = '✅ Accepted - View Contact';
-                btnStyle = [styles.contactButton, { backgroundColor: '#10B981' }];
-              } else {
-                btnLabel = '❌ Request Declined';
-                btnStyle = [styles.contactButton, { backgroundColor: '#EF4444' }];
-              }
-            } else if (isAcceptedGlobally) {
-              btnLabel = '⏳ Pending';
-              btnStyle = [styles.contactButton, { backgroundColor: '#D97706' }];
-            }
-
-            return (
-              <View key={item.id} style={styles.feedCard}>
-                <View style={styles.feedHeader}>
-                  <Text style={styles.feedName}>{item.name} • <Text style={styles.feedWeight}>{item.capacity}</Text></Text>
-                  <Text style={styles.feedPrice}>{item.price}</Text>
-                </View>
-                <Text style={styles.feedRoute}>{item.route}</Text>
-                {item.description ? (
-                  <Text style={styles.feedDesc}>📦 Items: {item.description}</Text>
-                ) : null}
-                {item.item_category ? (
-                  <Text style={styles.feedCatTag}>🏷️ {item.item_category}</Text>
-                ) : null}
-                <Text style={styles.feedDate}>📅 {item.date}</Text>
-
-                <TouchableOpacity
-                  style={btnStyle}
-                  onPress={() => handleAcceptAndContact(item, isAcceptedGlobally && !req)}
-                >
-                  <Text style={styles.contactButtonText}>{btnLabel}</Text>
-                </TouchableOpacity>
+          .map((item) => (
+            <View key={item.id} style={styles.feedCard}>
+              <View style={styles.feedHeader}>
+                <Text style={styles.feedName}>{item.name} • <Text style={styles.feedWeight}>{item.capacity}</Text></Text>
+                <Text style={styles.feedPrice}>{item.price}</Text>
               </View>
-            );
-          })}
+              <Text style={styles.feedRoute}>{item.route}</Text>
+              {item.description ? (
+                <Text style={styles.feedDesc}>📦 Items: {item.description}</Text>
+              ) : null}
+              {item.item_category ? (
+                <Text style={styles.feedCatTag}>🏷️ {item.item_category}</Text>
+              ) : null}
+              <Text style={styles.feedDate}>📅 {item.date}</Text>
+
+              <TouchableOpacity
+                style={styles.contactButton}
+                onPress={() => handleAcceptAndInstantContact(item)}
+              >
+                <Text style={styles.contactButtonText}>💬 Accept & Chat Instantly</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
       </ScrollView>
 
       {/* Pop-up Goods Description & Customs Modal */}
@@ -806,7 +838,6 @@ export default function App() {
 
               <Text style={styles.categoryTitle}>Customs Classification:</Text>
               
-              {/* Customs Option 1: Free Items */}
               <TouchableOpacity
                 style={[
                   styles.categoryOption,
@@ -823,7 +854,6 @@ export default function App() {
                 <Text style={styles.categoryDescText}>Standard Rate</Text>
               </TouchableOpacity>
 
-              {/* Dynamic Tagline Banner */}
               <View style={styles.earnMoreBanner}>
                 <Text style={styles.earnMoreBannerText}>
                   {role === 'sender'
@@ -832,7 +862,6 @@ export default function App() {
                 </Text>
               </View>
 
-              {/* Customs Option 2: Declaration Required */}
               <TouchableOpacity
                 style={[
                   styles.categoryOption,
@@ -849,7 +878,6 @@ export default function App() {
                 <Text style={styles.categoryDescText}>+25% Premium</Text>
               </TouchableOpacity>
 
-              {/* Customs Option 3: Restricted Items */}
               <TouchableOpacity
                 style={[
                   styles.categoryOption,
@@ -908,7 +936,6 @@ export default function App() {
       <View style={styles.bottomStatusSheet}>
         <View style={styles.sheetHandle} />
         
-        {/* Buffering Search Box */}
         {activeUserListing && (
           <View style={styles.searchingContainer}>
             {isSearching ? (
@@ -926,26 +953,40 @@ export default function App() {
                   <Text style={styles.matchTitle}>
                     🎉 Match Found ({partnerMatch.route})
                   </Text>
-                  <Text style={{ color: '#10B981', fontWeight: 'bold', fontSize: 11 }}>ACCEPTED</Text>
+                  <Text style={{ color: '#10B981', fontWeight: 'bold', fontSize: 11 }}>
+                    {activeUserListing.status ? activeUserListing.status.toUpperCase() : 'ACTIVE'}
+                  </Text>
                 </View>
                 <Text style={styles.matchDetails}>
-                  Partner: <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>{partnerMatch.name}</Text> • {partnerMatch.capacity} • {partnerMatch.price}
+                  Partner: <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>{partnerMatch.name}</Text> • {partnerMatch.capacity}
                 </Text>
-                <Text style={styles.matchSubText}>📅 Route date flexible: {partnerMatch.date}</Text>
 
                 <View style={[styles.actionRow, { marginTop: 8 }]}>
                   <TouchableOpacity 
                     style={[styles.actionBtn, styles.callBtn, { paddingVertical: 6 }]}
                     onPress={() => handleCall(partnerMatch.phone)}
                   >
-                    <Text style={styles.actionBtnText}>📞 Call {partnerMatch.name.split(' ')[0]}</Text>
+                    <Text style={styles.actionBtnText}>📞 Call</Text>
                   </TouchableOpacity>
+
                   <TouchableOpacity 
                     style={[styles.actionBtn, styles.emailBtn, { paddingVertical: 6 }]}
-                    onPress={() => handleEmail(partnerMatch.email)}
+                    onPress={() => {
+                      setChatPartner(partnerMatch);
+                      setShowChatModal(true);
+                    }}
                   >
-                    <Text style={styles.actionBtnText}>✉️ Email {partnerMatch.name.split(' ')[0]}</Text>
+                    <Text style={styles.actionBtnText}>💬 Chat</Text>
                   </TouchableOpacity>
+
+                  {activeUserListing.status === 'in_transit' && (
+                    <TouchableOpacity 
+                      style={[styles.actionBtn, { backgroundColor: '#F59E0B', paddingVertical: 6 }]}
+                      onPress={() => setShowLiveTrackingModal(true)}
+                    >
+                      <Text style={[styles.actionBtnText, { color: '#0F172A' }]}>📡 Live Map</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             )}
@@ -953,35 +994,7 @@ export default function App() {
         )}
 
         <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
-          <Text style={styles.bottomSheetSectionTitle}>📩 Incoming Acceptance Requests</Text>
-          {incomingRequests.filter((r) => r.status === 'pending').length === 0 ? (
-            <Text style={styles.emptySheetText}>No pending incoming requests.</Text>
-          ) : (
-            incomingRequests
-              .filter((r) => r.status === 'pending')
-              .map((req) => (
-                <View key={req.id} style={styles.innerCard}>
-                  <Text style={styles.innerCardText}>Request for: {req.listings?.route || 'Listing'}</Text>
-                  <Text style={styles.innerCardSubText}>Status: Pending Counter-Acceptance</Text>
-                  <View style={styles.actionRow}>
-                    <TouchableOpacity 
-                      style={[styles.actionBtn, { backgroundColor: '#10B981', paddingVertical: 6 }]}
-                      onPress={() => handleUpdateRequestStatus(req.id, 'accepted')}
-                    >
-                      <Text style={styles.actionBtnText}>Accept</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={[styles.actionBtn, { backgroundColor: '#EF4444', paddingVertical: 6 }]}
-                      onPress={() => handleUpdateRequestStatus(req.id, 'declined')}
-                    >
-                      <Text style={styles.actionBtnText}>Decline</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))
-          )}
-
-          <Text style={[styles.bottomSheetSectionTitle, { marginTop: 14 }]}>📦 My History & Listings</Text>
+          <Text style={styles.bottomSheetSectionTitle}>📦 Package Lifecycle & History</Text>
           {userListings.length === 0 ? (
             <Text style={styles.emptySheetText}>No past history or active listings found.</Text>
           ) : (
@@ -990,24 +1003,24 @@ export default function App() {
                 <View style={styles.feedHeader}>
                   <Text style={styles.innerCardText}>{item.route}</Text>
                   <Text style={[styles.badgeText, item.status === 'completed' ? { color: '#10B981' } : { color: '#F59E0B' }]}>
-                    {item.status === 'completed' ? 'COMPLETED' : 'PENDING'}
+                    {item.status ? item.status.toUpperCase() : 'PENDING'}
                   </Text>
                 </View>
                 <Text style={styles.innerCardSubText}>Capacity: {item.capacity} • Price: {item.price}</Text>
 
                 <View style={[styles.actionRow, { marginTop: 8 }]}>
                   <TouchableOpacity 
-                    style={[styles.statusToggleBtn, item.status !== 'completed' && styles.statusToggleBtnActive]}
-                    onPress={() => handleUpdateListingStatus(item.id, 'pending')}
+                    style={[styles.statusToggleBtn, item.status === 'in_transit' && { backgroundColor: '#D97706' }]}
+                    onPress={() => handleUpdateListingStatus(item.id, 'in_transit')}
                   >
-                    <Text style={styles.statusToggleText}>Mark as Pending</Text>
+                    <Text style={styles.statusToggleText}>Handover (In Transit)</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity 
                     style={[styles.statusToggleBtn, item.status === 'completed' && styles.statusToggleBtnActiveCompleted]}
                     onPress={() => handleUpdateListingStatus(item.id, 'completed')}
                   >
-                    <Text style={styles.statusToggleText}>Mark as Completed</Text>
+                    <Text style={styles.statusToggleText}>Delivered (Complete)</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1016,38 +1029,105 @@ export default function App() {
         </ScrollView>
       </View>
 
-      {/* Contact Modal */}
-      <Modal visible={selectedListing !== null} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Direct Contact Details</Text>
-            {selectedListing && (
-              <>
-                <Text style={styles.modalName}>{selectedListing.name}</Text>
-                <Text style={styles.modalSub}>Route: {selectedListing.route}</Text>
-                
-                <View style={styles.actionRow}>
-                  <TouchableOpacity 
-                    style={[styles.actionBtn, styles.callBtn]}
-                    onPress={() => handleCall(selectedListing.phone)}
-                  >
-                    <Text style={styles.actionBtnText}>📞 Call Now</Text>
-                  </TouchableOpacity>
+      {/* In-App Messaging Modal */}
+      <Modal visible={showChatModal} animationType="slide">
+        <SafeAreaView style={[styles.container, { flex: 1 }]}>
+          <View style={styles.chatHeader}>
+            <TouchableOpacity onPress={() => setShowChatModal(false)} style={styles.chatBackBtn}>
+              <Text style={styles.chatBackBtnText}>◀ Back</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={styles.chatHeaderTitle}>{chatPartner?.name || 'Chat'}</Text>
+              <Text style={styles.chatHeaderSub}>{chatPartner?.route || 'Carrier Partner'}</Text>
+            </View>
+          </View>
 
-                  <TouchableOpacity 
-                    style={[styles.actionBtn, styles.emailBtn]}
-                    onPress={() => handleEmail(selectedListing.email)}
-                  >
-                    <Text style={styles.actionBtnText}>✉️ Send Email</Text>
-                  </TouchableOpacity>
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item, index) => item.id ? item.id.toString() : index.toString()}
+            contentContainerStyle={styles.chatStreamList}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            renderItem={({ item }) => {
+              const isMine = item.sender_id === user?.id;
+              return (
+                <View style={[styles.chatBubble, isMine ? styles.chatBubbleMine : styles.chatBubblePartner]}>
+                  <Text style={styles.chatMessageText}>{item.text}</Text>
+                  <Text style={styles.chatTimeText}>
+                    {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
                 </View>
-              </>
-            )}
-            <TouchableOpacity style={styles.closeButton} onPress={() => setSelectedListing(null)}>
-              <Text style={styles.closeButtonText}>Close</Text>
+              );
+            }}
+          />
+
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <View style={styles.chatInputRow}>
+              <TextInput
+                style={styles.chatTextInput}
+                placeholder="Type a message..."
+                placeholderTextColor="#8E8E93"
+                value={newMessageText}
+                onChangeText={setNewMessageText}
+                multiline
+              />
+              <TouchableOpacity style={styles.sendMsgBtn} onPress={handleSendMessage}>
+                <Text style={styles.sendMsgBtnText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Automated Live Map Tracking Screen Modal */}
+      <Modal visible={showLiveTrackingModal || activeUserListing?.status === 'in_transit'} animationType="slide">
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0F1D' }}>
+          <View style={styles.trackingHeader}>
+            <Text style={styles.trackingTitle}>📡 Live Package Tracking</Text>
+            <Text style={styles.trackingSub}>
+              {role === 'traveler' ? 'Streaming live location to sender...' : 'Tracking traveler position live'}
+            </Text>
+            <TouchableOpacity onPress={() => setShowLiveTrackingModal(false)} style={{ padding: 6 }}>
+              <Text style={{ color: '#2563EB', fontWeight: 'bold' }}>Close Map</Text>
             </TouchableOpacity>
           </View>
-        </View>
+
+          <MapView
+            style={{ flex: 1 }}
+            region={{
+              latitude: currentCoords?.latitude || activeUserListing?.live_lat || 37.78825,
+              longitude: currentCoords?.longitude || activeUserListing?.live_lng || -122.4324,
+              latitudeDelta: 0.02,
+              longitudeDelta: 0.02,
+            }}
+          >
+            {(currentCoords || activeUserListing?.live_lat) && (
+              <Marker
+                coordinate={{
+                  latitude: currentCoords?.latitude || activeUserListing.live_lat,
+                  longitude: currentCoords?.longitude || activeUserListing.live_lng,
+                }}
+                title="Package Location"
+                description={`Carrier: ${activeUserListing?.name || 'Traveler'}`}
+              />
+            )}
+          </MapView>
+
+          <View style={styles.trackingFooter}>
+            {role === 'traveler' ? (
+              <TouchableOpacity
+                style={styles.completeDeliveryBtn}
+                onPress={() => handleUpdateListingStatus(activeUserListing.id, 'completed')}
+              >
+                <Text style={styles.completeDeliveryBtnText}>✅ Mark Package Delivered (Stop Tracking)</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.senderStatusText}>
+                🟢 Package In Transit. GPS coordinates update automatically as the traveler moves.
+              </Text>
+            )}
+          </View>
+        </SafeAreaView>
       </Modal>
 
       {/* Settings Modal */}
@@ -1066,38 +1146,26 @@ export default function App() {
               )}
             </View>
 
-            <TouchableOpacity 
-              style={styles.settingsRowBtn}
-              onPress={openPrivacyPolicy}
-            >
+            <TouchableOpacity style={styles.settingsRowBtn} onPress={openPrivacyPolicy}>
               <Text style={styles.settingsRowText}>📄 View Privacy Policy</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.settingsRowBtn, { backgroundColor: '#334155' }]}
-              onPress={handleSignOut}
-            >
+            <TouchableOpacity style={[styles.settingsRowBtn, { backgroundColor: '#334155' }]} onPress={handleSignOut}>
               <Text style={styles.settingsRowText}>🚪 Sign Out</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.settingsRowBtn, styles.deleteBtn]}
-              onPress={handleDeleteAccount}
-            >
+            <TouchableOpacity style={[styles.settingsRowBtn, styles.deleteBtn]} onPress={handleDeleteAccount}>
               <Text style={styles.deleteBtnText}>🗑️ Delete Account & Data</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.closeButton} 
-              onPress={() => setShowSettingsModal(false)}
-            >
+            <TouchableOpacity style={styles.closeButton} onPress={() => setShowSettingsModal(false)}>
               <Text style={styles.closeButtonText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Full 5-Point Privacy Policy Modal */}
+      {/* Privacy Policy Modal */}
       <Modal visible={showPrivacyModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { maxHeight: '80%' }]}>
@@ -1142,28 +1210,10 @@ const styles = StyleSheet.create({
   uploadIcon: { fontSize: 22 },
   uploadLabel: { color: '#94A3B8', fontSize: 10, marginTop: 4, textAlign: 'center', paddingHorizontal: 2 },
   previewImage: { width: '100%', height: '100%', borderRadius: 8 },
-  
-  verifyingOverlayBox: {
-    backgroundColor: '#0F172A',
-    padding: 16,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#F59E0B',
-  },
+  verifyingOverlayBox: { backgroundColor: '#0F172A', padding: 16, borderRadius: 10, alignItems: 'center', marginTop: 8, borderWidth: 1, borderColor: '#F59E0B' },
   verifyingOverlayText: { color: '#F59E0B', fontWeight: 'bold', fontSize: 14, marginTop: 8 },
   verifyingSubText: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
-
-  header: { 
-    paddingHorizontal: 16, 
-    paddingVertical: 12,
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#1E293B' 
-  },
+  header: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#1E293B' },
   userGreeting: { color: '#F59E0B', fontWeight: 'bold', fontSize: 13, flex: 1 },
   logoContainer: { flex: 2, alignItems: 'center', justifyContent: 'center' },
   logo: { fontSize: 18, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center' },
@@ -1197,29 +1247,31 @@ const styles = StyleSheet.create({
   feedDate: { color: '#64748B', fontSize: 12, marginBottom: 12 },
   contactButton: { backgroundColor: '#2563EB', padding: 10, borderRadius: 8, alignItems: 'center' },
   contactButtonText: { color: '#FFFFFF', fontWeight: '600' },
-
-  // Customs Category & Goods Modal Styles
-  modalContentCard: {
-    backgroundColor: '#1E293B',
-    padding: 20,
-    borderRadius: 16,
-    width: '85%',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
+  chatHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1E293B', borderBottomWidth: 1, borderBottomColor: '#334155' },
+  chatBackBtn: { paddingVertical: 6, paddingRight: 10 },
+  chatBackBtnText: { color: '#2563EB', fontWeight: 'bold', fontSize: 14 },
+  chatHeaderTitle: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
+  chatHeaderSub: { color: '#94A3B8', fontSize: 11 },
+  chatStreamList: { padding: 16 },
+  chatBubble: { maxWidth: '80%', padding: 12, borderRadius: 12, marginBottom: 10 },
+  chatBubbleMine: { backgroundColor: '#2563EB', alignSelf: 'flex-end', borderBottomRightRadius: 2 },
+  chatBubblePartner: { backgroundColor: '#1E293B', alignSelf: 'flex-start', borderBottomLeftRadius: 2 },
+  chatMessageText: { color: '#FFFFFF', fontSize: 14 },
+  chatTimeText: { color: '#CBD5E1', fontSize: 9, marginTop: 4, alignSelf: 'flex-end' },
+  chatInputRow: { flexDirection: 'row', padding: 12, backgroundColor: '#1E293B', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#334155' },
+  chatTextInput: { flex: 1, backgroundColor: '#0F172A', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, color: '#FFFFFF', fontSize: 14, maxHeight: 100 },
+  sendMsgBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginLeft: 8 },
+  sendMsgBtnText: { color: '#0F172A', fontWeight: 'bold', fontSize: 14 },
+  trackingHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#1E293B' },
+  trackingTitle: { color: '#F59E0B', fontWeight: 'bold', fontSize: 16 },
+  trackingSub: { color: '#94A3B8', fontSize: 11 },
+  trackingFooter: { padding: 16, backgroundColor: '#1E293B', borderTopWidth: 1, borderTopColor: '#334155' },
+  completeDeliveryBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 10, alignItems: 'center' },
+  completeDeliveryBtnText: { color: '#FFFFFF', fontWeight: 'bold' },
+  senderStatusText: { color: '#10B981', fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
+  modalContentCard: { backgroundColor: '#1E293B', padding: 20, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },
   categoryTitle: { color: '#94A3B8', fontSize: 12, fontWeight: 'bold', marginBottom: 6 },
-  categoryContainer: { marginBottom: 12 },
-  categoryOption: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
+  categoryOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#0F172A', padding: 10, borderRadius: 8, marginBottom: 6, borderWidth: 1, borderColor: '#334155' },
   categoryOptionSelected: { borderColor: '#F59E0B', backgroundColor: '#1E293B' },
   categoryOptionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
   categoryDescText: { color: '#10B981', fontSize: 11, fontWeight: 'bold' },
@@ -1227,109 +1279,29 @@ const styles = StyleSheet.create({
   earnMoreBannerText: { color: '#F59E0B', fontSize: 12, fontWeight: 'bold' },
   priceEstimateBox: { backgroundColor: '#0F172A', padding: 10, borderRadius: 8, marginBottom: 12, alignItems: 'center' },
   priceEstimateText: { color: '#FFFFFF', fontSize: 13 },
-  confirmModalButton: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-  },
+  confirmModalButton: { backgroundColor: '#2563EB', paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginTop: 8 },
   confirmModalButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-
-  // Date Picker Modal Styles
-  datePickerModalCard: {
-    backgroundColor: '#1E293B',
-    padding: 20,
-    borderRadius: 16,
-    width: '85%',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  datePickerWrapper: {
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    marginVertical: 12,
-    width: '100%',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  confirmDateButton: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 10,
-    width: '100%',
-    alignItems: 'center',
-    marginTop: 8,
-  },
+  datePickerModalCard: { backgroundColor: '#1E293B', padding: 20, borderRadius: 16, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#334155' },
+  datePickerWrapper: { backgroundColor: '#0F172A', borderRadius: 12, marginVertical: 12, width: '100%', alignItems: 'center', overflow: 'hidden' },
+  confirmDateButton: { backgroundColor: '#2563EB', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 10, width: '100%', alignItems: 'center', marginTop: 8 },
   confirmDateButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 15 },
-
-  // Bottom Status Sheet Styles
-  bottomStatusSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#1E293B',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#334155',
-    elevation: 10,
-  },
-  sheetHandle: {
-    width: 36,
-    height: 4,
-    backgroundColor: '#475569',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 8,
-  },
+  bottomStatusSheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#1E293B', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 24, borderTopWidth: 1, borderTopColor: '#334155', elevation: 10 },
+  sheetHandle: { width: 36, height: 4, backgroundColor: '#475569', borderRadius: 2, alignSelf: 'center', marginBottom: 8 },
   searchingContainer: { marginBottom: 12 },
-  bufferingBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
+  bufferingBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0F172A', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#334155' },
   bufferingText: { color: '#F59E0B', fontSize: 13, fontWeight: '600' },
-  matchCard: {
-    backgroundColor: '#0F172A',
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#10B981',
-  },
+  matchCard: { backgroundColor: '#0F172A', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#10B981' },
   matchTitle: { color: '#F59E0B', fontSize: 13, fontWeight: 'bold' },
   matchDetails: { color: '#94A3B8', fontSize: 12, marginTop: 4 },
-  matchSubText: { color: '#64748B', fontSize: 11, marginTop: 2 },
-
   bottomSheetSectionTitle: { color: '#F59E0B', fontSize: 14, fontWeight: 'bold', marginBottom: 8 },
   emptySheetText: { color: '#64748B', fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
   innerCard: { backgroundColor: '#0F172A', borderRadius: 10, padding: 10, marginBottom: 8 },
   innerCardText: { color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' },
   innerCardSubText: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
   badgeText: { fontSize: 11, fontWeight: 'bold' },
-
-  statusToggleBtn: {
-    flex: 1,
-    backgroundColor: '#334155',
-    paddingVertical: 6,
-    borderRadius: 6,
-    alignItems: 'center',
-    marginHorizontal: 3,
-  },
-  statusToggleBtnActive: { backgroundColor: '#D97706' },
+  statusToggleBtn: { flex: 1, backgroundColor: '#334155', paddingVertical: 6, borderRadius: 6, alignItems: 'center', marginHorizontal: 3 },
   statusToggleBtnActiveCompleted: { backgroundColor: '#10B981' },
   statusToggleText: { color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' },
-
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { backgroundColor: '#1E293B', padding: 24, borderRadius: 16, width: '85%' },
   modalTitle: { color: '#F59E0B', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
